@@ -31,7 +31,7 @@ from PIL import Image, ImageTk
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.2.0"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
 
@@ -225,10 +225,13 @@ class TextureInjectorApp:
         self.log_text.config(state=tk.DISABLED)
 
         # === MANUAL TEXTURE OVERRIDE SECTION ===
-        manual_frame = ttk.LabelFrame(main, text="Manual Texture Override (Fallback)", padding="10")
+        manual_frame = ttk.LabelFrame(main, text="🛡️ MANUAL OVERRIDE (Failsafe Mode)", padding="10")
         manual_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(manual_frame, text="If auto-mapping fails, manually assign textures to TMD files:", foreground="gray").pack(anchor=tk.W)
+        ttk.Label(manual_frame, text="When auto-mapping is unsure, YOU decide what texture goes where!", 
+                 foreground="#DC143C", font=("Segoe UI", 9, "bold")).pack(anchor=tk.W)
+        ttk.Label(manual_frame, text="⚠️ Use this for: checkerboard lava, blue mountains, orange ground — anything the auto-detect got wrong!", 
+                 foreground="gray").pack(anchor=tk.W, pady=(0, 5))
 
         self.manual_tree = ttk.Treeview(manual_frame, columns=("file", "surface", "texture"), show="headings", height=4)
         self.manual_tree.heading("file", text="TMD File")
@@ -386,6 +389,35 @@ class TextureInjectorApp:
             tmd_files = [f for f in parser.list_files() if f.upper().endswith(".TMD")]
             report = self.color_mapper.preview_mapping(parser, tmd_files)
             text.insert(tk.END, report)
+            
+            # Get failsafe recommendation
+            mode, msg = self.color_mapper.get_failsafe_recommendation(parser, tmd_files)
+            
+            # Show colored banner based on safety
+            if mode == "auto":
+                banner = tk.Label(preview, text=f"✅ {msg}", 
+                                 bg="#90EE90", fg="#006400", font=("Segoe UI", 10, "bold"),
+                                 relief=tk.RIDGE, padx=10, pady=5)
+                banner.pack(fill=tk.X, padx=10, pady=5)
+            elif mode == "assisted":
+                banner = tk.Label(preview, text=f"⚠️ {msg}", 
+                                 bg="#FFD700", fg="#8B4513", font=("Segoe UI", 10, "bold"),
+                                 relief=tk.RIDGE, padx=10, pady=5)
+                banner.pack(fill=tk.X, padx=10, pady=5)
+                manual_btn = tk.Button(preview, text="🔧 OPEN MANUAL OVERRIDE (Recommended!)", 
+                                    bg="#FF6B6B", fg="white", font=("Segoe UI", 11, "bold"),
+                                    command=lambda: [preview.destroy(), self._scan_tmd_manual()])
+                manual_btn.pack(fill=tk.X, padx=10, pady=(0, 5))
+            else:  # manual
+                banner = tk.Label(preview, text=f"🛑 {msg}", 
+                                 bg="#FF6B6B", fg="white", font=("Segoe UI", 10, "bold"),
+                                 relief=tk.RIDGE, padx=10, pady=5)
+                banner.pack(fill=tk.X, padx=10, pady=5)
+                manual_btn = tk.Button(preview, text="🔧 MANUAL OVERRIDE REQUIRED", 
+                                    bg="#DC143C", fg="white", font=("Segoe UI", 11, "bold"),
+                                    command=lambda: [preview.destroy(), self._scan_tmd_manual()])
+                manual_btn.pack(fill=tk.X, padx=10, pady=(0, 5))
+                
         except Exception as e:
             text.insert(tk.END, f"ERROR: {e}")
 
@@ -472,15 +504,18 @@ class TextureInjectorApp:
                         if pkt.color:
                             colors.add(pkt.color)
                     
-                    # Classify colors
-                    surfaces = set()
+                    # Classify colors with confidence
+                    surface_entries = []
                     if self.color_mapper:
                         for c in colors:
-                            s = self.color_mapper.classify_color(*c)
-                            if s:
-                                surfaces.add(s)
+                            result = self.color_mapper.classify_color(*c)
+                            if result and result[0]:
+                                surface, confidence, needs_confirm = result
+                                conf_str = f"{confidence:.0%}"
+                                warn = "⚠️" if needs_confirm else "✅"
+                                surface_entries.append(f"{warn} {surface} [{conf_str}]")
                     
-                    surface_str = ", ".join(sorted(surfaces)) if surfaces else "unknown"
+                    surface_str = ", ".join(sorted(set(surface_entries))) if surface_entries else "unknown"
                     tex = self.manual_overrides.get(tmd_path, "(auto)")
                     self.manual_tree.insert("", tk.END, values=(tmd_path, surface_str, tex))
                     
