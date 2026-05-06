@@ -81,6 +81,13 @@ DEFAULT_COLOR_MAP = {
         "textures": ["metal_01.png"],
         "uv_mode": "repeat",
     },
+    "stone_platform": {
+        "color_range": {"r": [90, 160], "g": [90, 160], "b": [90, 160]},
+        "tolerance": 25,
+        "textures": ["rock_01.png", "stone_01.png", "ground_01.png"],
+        "uv_mode": "repeat",
+        "description": "Grey floating platforms — Bubsy 3D uses GREY for stone/rock platforms!",
+    },
     "wood": {
         "color_range": {"r": [120, 180], "g": [80, 120], "b": [20, 60]},
         "tolerance": 20,
@@ -403,6 +410,7 @@ class ColorMapper:
         lines.append("📋 Bubsy 3D Color Quick Reference:")
         lines.append("   • Black/White checkerboard = LAVA (always)")
         lines.append("   • Orange/Brown = GROUND / RUBBLE (not lava!)")
+        lines.append("   • Grey = STONE PLATFORMS (floating rock platforms)")
         lines.append("   • Blue mountains = MOUNTAIN (Level 1+, not water)")
         lines.append("   • Pure blue = WATER")
         lines.append("   • Green = GRASS")

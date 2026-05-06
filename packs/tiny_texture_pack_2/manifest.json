@@ -100,6 +100,20 @@
       "uv_mode": "repeat",
       "priority": 2
     },
+    "stone_platform": {
+      "color_range": { "r": [90, 160], "g": [90, 160], "b": [90, 160] },
+      "tolerance": 25,
+      "textures": [
+        "textures/rock_01.png",
+        "textures/rock_02.png",
+        "textures/rock_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2,
+      "description": "Grey floating platforms — Bubsy 3D uses GREY for stone/rock platforms!"
+    },
     "wood": {
       "color_range": { "r": [120, 180], "g": [80, 120], "b": [20, 60] },
       "tolerance": 20,
@@ -180,7 +194,7 @@
   },
   "metadata": {
     "total_textures": 480,
-    "categories": ["grass", "water", "lava", "rock", "sand", "snow", "metal", "wood", "dirt"],
+    "categories": ["grass", "water", "lava", "rock", "sand", "snow", "metal", "wood", "dirt", "stone_platform"],
     "compatible_versions": ["SLUS-00001", "SLES-00001", "SLPS-00001"],
     "created_date": "2026-05-06",
     "requires_injector_version": ">=1.0.0"
