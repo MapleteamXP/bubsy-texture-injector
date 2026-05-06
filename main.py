@@ -26,12 +26,35 @@ from rom_parser import open_ps1_image
 from pack_manager import load_pack, list_available_packs, PackInfo
 from injector import TextureInjector, InjectionResult
 from color_mapper import ColorMapper, load_color_manifest
+from PIL import Image, ImageTk
 
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
 APP_VERSION = "1.0.0"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
+
+
+def _load_bubsy_bg(root):
+    """Try to load a Bubsy background image."""
+    bg_paths = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "bubsy_bg.png"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "bubsy_bg.jpg"),
+    ]
+    for p in bg_paths:
+        if os.path.exists(p):
+            try:
+                img = Image.open(p)
+                # Resize to window size
+                img = img.resize((1000, 750), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                label = tk.Label(root, image=photo)
+                label.image = photo  # Keep reference
+                label.place(x=0, y=0, relwidth=1, relheight=1)
+                return label
+            except Exception:
+                pass
+    return None
 
 
 # ── GUI Application ──
@@ -201,7 +224,27 @@ class TextureInjectorApp:
         self.log_text.insert(tk.END, "Load a ROM, select a texture pack, and click INJECT!\n")
         self.log_text.config(state=tk.DISABLED)
 
-    # ── Actions ──
+        # === MANUAL TEXTURE OVERRIDE SECTION ===
+        manual_frame = ttk.LabelFrame(main, text="Manual Texture Override (Fallback)", padding="10")
+        manual_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(manual_frame, text="If auto-mapping fails, manually assign textures to TMD files:", foreground="gray").pack(anchor=tk.W)
+
+        self.manual_tree = ttk.Treeview(manual_frame, columns=("file", "surface", "texture"), show="headings", height=4)
+        self.manual_tree.heading("file", text="TMD File")
+        self.manual_tree.heading("surface", text="Detected Surface")
+        self.manual_tree.heading("texture", text="Assigned Texture")
+        self.manual_tree.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        manual_btn_row = ttk.Frame(manual_frame)
+        manual_btn_row.pack(fill=tk.X)
+        ttk.Button(manual_btn_row, text="🔍 Scan TMD Files", command=self._scan_tmd_manual).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(manual_btn_row, text="📝 Assign Texture", command=self._manual_assign_texture).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(manual_btn_row, text="❌ Clear Overrides", command=self._clear_manual).pack(side=tk.LEFT)
+
+        self.manual_overrides: dict[str, str] = {}  # iso_path -> texture_path
+
+    # ── Manual Override Actions ──
     def _log(self, msg: str):
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, msg + "\n")
@@ -402,6 +445,82 @@ class TextureInjectorApp:
             except Exception as e:
                 self._log(f"ERROR loading config: {e}")
 
+    def _scan_tmd_manual(self):
+        """Scan ROM for TMD files and populate manual override tree."""
+        if not self.iso_path or not os.path.exists(self.iso_path):
+            messagebox.showwarning("No ROM", "Load a ROM first.")
+            return
+        try:
+            parser = open_ps1_image(self.iso_path)
+            tmd_files = [f for f in parser.list_files() if f.upper().endswith(".TMD")]
+            
+            # Clear tree
+            for item in self.manual_tree.get_children():
+                self.manual_tree.delete(item)
+            
+            # Scan each TMD for colors
+            for tmd_path in tmd_files:
+                try:
+                    data = parser.extract_file(tmd_path)
+                    from tmd_parser import read_tmd, find_flat_shaded_primitives
+                    model = read_tmd(data)
+                    flat = find_flat_shaded_primitives(model)
+                    
+                    # Collect unique colors
+                    colors = set()
+                    for oi, pi, pkt in flat:
+                        if pkt.color:
+                            colors.add(pkt.color)
+                    
+                    # Classify colors
+                    surfaces = set()
+                    if self.color_mapper:
+                        for c in colors:
+                            s = self.color_mapper.classify_color(*c)
+                            if s:
+                                surfaces.add(s)
+                    
+                    surface_str = ", ".join(sorted(surfaces)) if surfaces else "unknown"
+                    tex = self.manual_overrides.get(tmd_path, "(auto)")
+                    self.manual_tree.insert("", tk.END, values=(tmd_path, surface_str, tex))
+                    
+                except Exception as e:
+                    self.manual_tree.insert("", tk.END, values=(tmd_path, f"error: {e}", "(none)"))
+            
+            self._log(f"Manual scan: found {len(tmd_files)} TMD files")
+        except Exception as e:
+            self._log(f"Manual scan error: {e}")
+
+    def _manual_assign_texture(self):
+        """Let user pick a texture file for selected TMD."""
+        sel = self.manual_tree.selection()
+        if not sel:
+            messagebox.showinfo("Select First", "Select a TMD file in the list above.")
+            return
+        
+        # Get selected TMD path
+        item = sel[0]
+        values = self.manual_tree.item(item, "values")
+        tmd_path = values[0]
+        
+        # Ask for texture
+        tex_path = filedialog.askopenfilename(
+            title=f"Select texture for {os.path.basename(tmd_path)}",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp"), ("All files", "*.*")],
+        )
+        if tex_path:
+            self.manual_overrides[tmd_path] = tex_path
+            self.manual_tree.item(item, values=(values[0], values[1], tex_path))
+            self._log(f"Manual override: {tmd_path} -> {tex_path}")
+
+    def _clear_manual(self):
+        """Clear all manual overrides."""
+        self.manual_overrides.clear()
+        for item in self.manual_tree.get_children():
+            vals = self.manual_tree.item(item, "values")
+            self.manual_tree.item(item, values=(vals[0], vals[1], "(auto)"))
+        self._log("Manual overrides cleared")
+
     def _run_injection(self):
         if not self.iso_path or not self.selected_pack:
             return
@@ -415,6 +534,8 @@ class TextureInjectorApp:
         self._log(f"ROM: {self.iso_path}")
         self._log(f"Pack: {self.selected_pack.name}")
         self._log(f"Dry Run: {self.dry_run_var.get()}")
+        if self.manual_overrides:
+            self._log(f"Manual overrides: {len(self.manual_overrides)} files")
         self._log("=" * 50)
 
         # Run in thread to keep UI responsive
@@ -431,11 +552,32 @@ class TextureInjectorApp:
             bpp_map = {"4bpp": 0, "8bpp": 1, "16bpp": 2}
             build_cfg.preferred_tim_mode = bpp_map.get(self.color_depth.get(), 2)
 
+            # Prepare manifest — inject manual overrides
+            manifest = dict(self.selected_pack.manifest)
+            if self.manual_overrides:
+                textures = manifest.get("textures", {})
+                standalone = textures.get("standalone_tim", {})
+                for tmd_path, tex_path in self.manual_overrides.items():
+                    # Add as a TMD level entry for manual injection
+                    tmd_levels = textures.get("tmd_levels", {})
+                    level_name = os.path.basename(tmd_path).replace(".TMD", "").replace(".tmd", "")
+                    tmd_levels[level_name] = {
+                        "tmd_file": tmd_path,
+                        "polygon_groups": {
+                            "manual_override": {
+                                "replacement": tex_path,
+                                "uv_mode": "auto"
+                            }
+                        }
+                    }
+                    textures["tmd_levels"] = tmd_levels
+                manifest["textures"] = textures
+
             injector = TextureInjector(
                 iso_path=self.iso_path,
                 build_config=build_cfg,
                 pack_dir=self.selected_pack.base_dir,
-                manifest=self.selected_pack.manifest,
+                manifest=manifest,
                 dry_run=self.dry_run_var.get(),
                 progress_callback=self._progress_callback,
             )
@@ -502,6 +644,19 @@ class TextureInjectorApp:
 
 def main():
     root = tk.Tk()
+    
+    # Set window icon (bobcat!)
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "bubsy_icon.png")
+    if os.path.exists(icon_path):
+        try:
+            img = tk.PhotoImage(file=icon_path)
+            root.iconphoto(True, img)
+        except Exception:
+            pass
+    
+    # Try to load Bubsy background
+    _load_bubsy_bg(root)
+    
     app = TextureInjectorApp(root)
     root.mainloop()
 

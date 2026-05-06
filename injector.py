@@ -283,46 +283,76 @@ class TextureInjector:
         tgt: InjectionTarget,
         textured_prims: List[Tuple[int, int, PrimitivePacket]],
         flat_prims: List[Tuple[int, int, PrimitivePacket]],
+        color_mapper=None,
     ) -> bool:
         """Inject a replacement texture into a TMD model."""
         if not tgt.replacement_tim:
             return False
 
-        # Strategy: If the polygon group already has textured primitives,
-        # patch the FIRST textured primitive's texpage/CLUT/UVs to point
-        # to our new TIM.  If no textures exist yet, upgrade a flat-shaded
-        # primitive to textured using placeholder UVs.
-        #
-        # For a real pack manifest, the user may specify exact (obj, prim)
-        # indices; here we do a best-effort group match.
+        # Strategy 1: If a color_mapper is attached, try smart surface-type injection
+        if color_mapper and tgt.polygon_group:
+            surface = tgt.polygon_group  # e.g. "grass", "lava", "water"
+            # Find flat-shaded primitives whose color matches this surface type
+            matched = []
+            for oi, pi, pkt in flat_prims:
+                if pkt.color:
+                    r, g, b = pkt.color
+                    detected = color_mapper.classify_color(r, g, b)
+                    if detected == surface:
+                        matched.append((oi, pi, pkt))
+            
+            if matched:
+                # Upgrade ALL matched flat-shaded polygons to textured
+                for oi, pi, pkt in matched:
+                    n_vert = 4 if pkt.is_quad else 3
+                    uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
+                    texpage = self._make_texpage_for_tim(tgt.replacement_tim)
+                    upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=0)
+                self._log(f"    Smart-mapped {len(matched)} {surface} polygons via color detection")
+                return True
 
-        # 1) Try to patch existing textured primitives in the target group
+        # Strategy 2: If the polygon group already has textured primitives, patch existing
         for oi, pi, pkt in textured_prims:
-            # In a full implementation, the manifest would map polygon_group
-            # to specific (obj, prim) ranges.  For now we target the first
-            # textured primitive as a demo.
             new_texpage = self._make_texpage_for_tim(tgt.replacement_tim)
-            new_clut = 0  # 16bpp has no CLUT
+            new_clut = 0
             if tgt.replacement_tim.has_clut:
-                new_clut = 0x0000  # VRAM CLUT address placeholder
-
-            # Simple UVs: map 0–255 across the primitive vertices
+                new_clut = 0x0000
             n_vert = 4 if pkt.is_quad else 3
-            uvs = [(i * (255 // max(1, n_vert - 1)), i * (255 // max(1, n_vert - 1))) for i in range(n_vert)]
-
+            uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
             patch_texture_reference(pkt, new_texpage, new_clut, uvs)
             return True
 
-        # 2) Fallback: upgrade a flat-shaded primitive to textured
+        # Strategy 3: Fallback — upgrade first flat-shaded primitive to textured
         if flat_prims:
             oi, pi, pkt = flat_prims[0]
             n_vert = 4 if pkt.is_quad else 3
-            uvs = [(i * (255 // max(1, n_vert - 1)), i * (255 // max(1, n_vert - 1))) for i in range(n_vert)]
+            uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
             texpage = self._make_texpage_for_tim(tgt.replacement_tim)
             upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=0)
             return True
 
         return False
+
+    def _generate_uvs(self, n_vert: int, tex_w: int, tex_h: int) -> List[Tuple[int, int]]:
+        """Generate UV coordinates that tile across the polygon."""
+        # For world-space mapping, generate UVs that cover the full texture
+        # with slight variation based on vertex index
+        uvs = []
+        for i in range(n_vert):
+            if n_vert == 3:
+                # Triangle mapping: corners of texture
+                corners = [(0, 0), (255, 0), (128, 255)]
+                uvs.append(corners[i])
+            elif n_vert == 4:
+                # Quad mapping: full texture corners
+                corners = [(0, 0), (255, 0), (255, 255), (0, 255)]
+                uvs.append(corners[i])
+            else:
+                # Fallback for unusual vertex counts
+                u = int((i / max(1, n_vert - 1)) * 255)
+                v = int((i / max(1, n_vert - 1)) * 255)
+                uvs.append((u, v))
+        return uvs
 
     def _make_texpage_for_tim(self, tim: TIMImage) -> int:
         """Construct a basic TexPage register value for the TIM."""
