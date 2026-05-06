@@ -34,7 +34,8 @@ REM Build with PyInstaller
 echo [3/4] Building executable with PyInstaller...
 pyinstaller --noconfirm --onefile --windowed ^
     --name "Bubsy3D_TextureInjector" ^
-    --icon "NONE" ^
+    --icon "assets\\bubsy_icon.ico" ^
+    --add-data "assets;assets" ^
     --add-data "packs;packs" ^
     --add-data "docs;docs" ^
     main.py
@@ -46,9 +47,8 @@ if errorlevel 1 (
 )
 
 REM Copy packs to dist
-echo [4/4] Copying packs to output...
+echo [4/4] Verifying output...
 if exist "dist\Bubsy3D_TextureInjector.exe" (
-    xcopy /s /i /y "packs" "dist\packs" >nul 2>&1
     echo.
     echo ==========================================
     echo  BUILD SUCCESS! ✅
@@ -62,8 +62,9 @@ if exist "dist\Bubsy3D_TextureInjector.exe" (
     echo   3. Select a texture pack from the list
     echo   4. Click INJECT TEXTURES!
     echo.
-    echo Packs folder: dist\packs\
-    echo Add new packs by placing folders there.
+    echo NOTE: You need to download textures first!
+    echo   Visit: https://screamingbrainstudios.itch.io/tiny-texture-pack-2
+    echo   Place PNG files in: packs\tiny_texture_pack_2\textures\
     echo.
 ) else (
     echo ERROR: Build output not found.
