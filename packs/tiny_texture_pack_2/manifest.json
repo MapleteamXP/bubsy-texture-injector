@@ -1,0 +1,188 @@
+{
+  "pack_name": "Tiny Texture Pack 2 - Bubsy 3D Edition",
+  "author": "Screaming Brain Studios (CC0)",
+  "version": "1.0.0",
+  "license": "CC0 / Public Domain",
+  "description": "480 CC0 textures from Tiny Texture Pack 2, mapped for Bubsy 3D level geometry enhancement. Converts flat-shaded polygons into beautifully textured surfaces.",
+  "source_url": "https://screamingbrainstudios.itch.io/tiny-texture-pack-2",
+  "color_map": {
+    "grass": {
+      "color_range": { "r": [0, 60], "g": [120, 255], "b": [0, 80] },
+      "tolerance": 25,
+      "textures": [
+        "textures/grass_01.png",
+        "textures/grass_02.png",
+        "textures/grass_03.png",
+        "textures/grass_04.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 1
+    },
+    "water": {
+      "color_range": { "r": [0, 40], "g": [40, 120], "b": [120, 255] },
+      "tolerance": 20,
+      "textures": [
+        "textures/water_01.png",
+        "textures/water_02.png",
+        "textures/water_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 1,
+      "translucent": true
+    },
+    "lava": {
+      "color_range": { "r": [180, 255], "g": [0, 80], "b": [0, 40] },
+      "tolerance": 30,
+      "textures": [
+        "textures/lava_01.png",
+        "textures/lava_02.png",
+        "textures/lava_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 1,
+      "emissive": true
+    },
+    "rock": {
+      "color_range": { "r": [80, 160], "g": [60, 120], "b": [40, 80] },
+      "tolerance": 20,
+      "textures": [
+        "textures/rock_01.png",
+        "textures/rock_02.png",
+        "textures/rock_03.png",
+        "textures/rock_04.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2
+    },
+    "sand": {
+      "color_range": { "r": [180, 255], "g": [140, 220], "b": [60, 120] },
+      "tolerance": 25,
+      "textures": [
+        "textures/sand_01.png",
+        "textures/sand_02.png",
+        "textures/sand_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2
+    },
+    "snow": {
+      "color_range": { "r": [200, 255], "g": [200, 255], "b": [200, 255] },
+      "tolerance": 15,
+      "textures": [
+        "textures/snow_01.png",
+        "textures/snow_02.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 1
+    },
+    "metal": {
+      "color_range": { "r": [120, 180], "g": [120, 180], "b": [120, 180] },
+      "tolerance": 20,
+      "textures": [
+        "textures/metal_01.png",
+        "textures/metal_02.png",
+        "textures/metal_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2
+    },
+    "wood": {
+      "color_range": { "r": [120, 180], "g": [80, 120], "b": [20, 60] },
+      "tolerance": 20,
+      "textures": [
+        "textures/wood_01.png",
+        "textures/wood_02.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2
+    },
+    "ground_dirt": {
+      "color_range": { "r": [100, 160], "g": [60, 100], "b": [20, 60] },
+      "tolerance": 20,
+      "textures": [
+        "textures/dirt_01.png",
+        "textures/dirt_02.png",
+        "textures/dirt_03.png"
+      ],
+      "randomize": true,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 2
+    },
+    "checkerboard": {
+      "pattern": "checker",
+      "color_range": { "r": [0, 255], "g": [0, 255], "b": [0, 255] },
+      "tolerance": 0,
+      "textures": [
+        "textures/checker_alt_01.png"
+      ],
+      "randomize": false,
+      "scale": 1.0,
+      "uv_mode": "repeat",
+      "priority": 0,
+      "detect_pattern": true
+    }
+  },
+  "level_overrides": {
+    "catatomic_catastrophe": {
+      "lava": {
+        "color_range": { "r": [160, 255], "g": [0, 100], "b": [0, 60] },
+        "tolerance": 35
+      }
+    },
+    "woolie_bully": {
+      "lava": {
+        "color_range": { "r": [200, 255], "g": [0, 60], "b": [0, 30] },
+        "tolerance": 25
+      }
+    },
+    "das_bobcat": {
+      "sand": {
+        "color_range": { "r": [200, 255], "g": [160, 240], "b": [80, 140] },
+        "tolerance": 30
+      }
+    },
+    "dome_sweet_dome": {
+      "metal": {
+        "color_range": { "r": [140, 200], "g": [140, 200], "b": [140, 200] },
+        "tolerance": 20
+      }
+    }
+  },
+  "global_settings": {
+    "texture_size": 128,
+    "color_depth": 16,
+    "atlas_pack": true,
+    "atlas_size": 256,
+    "mipmaps": false,
+    "dithering": true,
+    "preserve_original_colors": false,
+    "uv_mode": "world_space",
+    "uv_scale": 1.0,
+    "backup_original": true,
+    "dry_run_default": false
+  },
+  "metadata": {
+    "total_textures": 480,
+    "categories": ["grass", "water", "lava", "rock", "sand", "snow", "metal", "wood", "dirt"],
+    "compatible_versions": ["SLUS-00001", "SLES-00001", "SLPS-00001"],
+    "created_date": "2026-05-06",
+    "requires_injector_version": ">=1.0.0"
+  }
+}
