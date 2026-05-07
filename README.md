@@ -68,10 +68,16 @@ packs/my_pack/
 
 ### Included Pack: Tiny Texture Pack 2 (Built-In!)
 
-The default pack includes **28 procedurally-generated PS1-style textures** right out of the box:
+The default pack includes **28 PS1-authentic textures** right out of the box:
 - 🌿 Grass, 💧 Water, 🔥 Lava, 🪨 Rock, 🏖️ Sand, ❄️ Snow, 🔩 Metal, 🪵 Wood, 🟫 Dirt
 - All 128×128 pixels, PS1-VRAM-optimized
 - **No external download required!**
+
+**PS1 Authenticity:**
+- **16-color indexed palettes** (like PS1 4bpp mode)
+- **Bayer dithering** — visible checkerboard/dot patterns between color bands
+- **Harsh posterization** — discrete color steps, no smooth gradients
+- Procedurally generated with `generate_textures.py`
 
 Want higher quality? The pack also supports **Screaming Brain Studios' Tiny Texture Pack 2** (CC0/Public Domain):
 - 480 hand-crafted textures at 512×512, 256×256, 128×128
@@ -79,10 +85,15 @@ Want higher quality? The pack also supports **Screaming Brain Studios' Tiny Text
 
 ### Creating Your Own Pack
 
+See **`docs/PACK_GUIDE.md`** for a complete step-by-step guide on creating, installing, and sharing custom texture packs.
+
+Quick version:
 1. Create a folder in `packs/`
 2. Add textures to `textures/`
 3. Create `manifest.json` following the schema in `docs/`
 4. Optionally create `color_manifest.json` for smart color mapping
+
+**Full guide:** [docs/PACK_GUIDE.md](docs/PACK_GUIDE.md)
 
 ---
 

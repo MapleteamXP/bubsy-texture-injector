@@ -1,233 +1,424 @@
 """
-Generate PS1-style procedural textures for the Bubsy 3D Texture Injector.
-These textures are designed to look like real PS1-era pixel art textures.
+Generate AUTHENTIC PS1-style procedural textures.
+
+PS1 hallmark: Visible Bayer dithering between a SMALL number of color bands.
+The trick: use only 4-8 colors and manually perturb pixels with Bayer matrix
+to create obvious checkerboard/dot patterns at band boundaries.
 """
 import os
 import random
-from PIL import Image, ImageDraw, ImageFilter
-import numpy as np
+import math
+from PIL import Image
 
-def save_ps1_texture(img, path, dither=True):
-    """Save with PS1-style limited color palette"""
-    if dither:
-        # Reduce to 16-bit color depth (PS1 style)
-        img = img.quantize(colors=256, method=2).convert('RGB')
-    img.save(path)
-    print(f"  Saved: {path}")
+# ── Bayer 4x4 Matrix (PS1 standard) ──
+# Values 0-15, scaled to perturbation range
+BAYER_4X4 = [
+    [ 0,  8,  2, 10],
+    [12,  4, 14,  6],
+    [ 3, 11,  1,  9],
+    [15,  7, 13,  5]
+]
 
-def generate_grass(size=128):
-    """Green grass with pixel noise"""
+def bayer_value(x, y):
+    """Get Bayer threshold at position (0-15 range)."""
+    return BAYER_4X4[y % 4][x % 4]
+
+def save_ps1_texture(img, path, num_colors=8):
+    """Save with aggressive posterization."""
+    indexed = img.quantize(
+        colors=num_colors,
+        method=Image.Quantize.MEDIANCUT,
+        dither=Image.Dither.ORDERED
+    )
+    indexed.save(path)
+    print(f"  Saved: {path} ({num_colors}-color, ordered dither)")
+
+def discretize_with_dither(value, thresholds, x, y, dither_strength=12):
+    """
+    Map a continuous value to discrete bands with Bayer dithering.
+    
+    value: 0-255 continuous input
+    thresholds: list of band boundaries (e.g., [60, 120, 180])
+    x, y: pixel position for Bayer pattern
+    dither_strength: how much the dither can shift the boundary
+    
+    Returns: discrete band index + dither offset
+    """
+    # Apply Bayer dither to the value
+    bayer = (bayer_value(x, y) / 15.0 - 0.5) * dither_strength
+    adjusted = value + bayer
+    
+    # Find which band it falls into
+    for i, t in enumerate(thresholds):
+        if adjusted < t:
+            return i
+    return len(thresholds)
+
+def generate_grass(size=128, variant=1):
+    """PS1 grass: 4 discrete green shades with Bayer dithered transitions."""
     img = Image.new('RGB', (size, size))
     pixels = img.load()
+    
+    # 4-color palette
+    colors = [
+        (20, 80, 10),    # Dark
+        (35, 120, 18),   # Mid-dark
+        (50, 160, 25),   # Mid-bright
+        (65, 200, 35),   # Bright
+    ]
+    thresholds = [85, 140, 195]  # Band boundaries
+    
     for y in range(size):
         for x in range(size):
-            base = random.randint(40, 80)
-            noise = random.randint(-20, 20)
-            g = min(255, max(0, base + 80 + noise))
-            r = min(255, max(0, base // 2 + noise))
-            b = min(255, max(0, base // 3 + noise))
-            # Add some "blade" lines
-            if random.random() < 0.1:
-                g = min(255, g + 30)
-            pixels[x, y] = (r, g, b)
+            # Smooth base value
+            base = (math.sin(x * 0.15 + variant) * 40 +
+                    math.cos(y * 0.2 + variant * 0.7) * 35 +
+                    math.sin((x + y) * 0.1) * 20 +
+                    128)  # Center around 128
+            
+            # Discretize with Bayer dither
+            band = discretize_with_dither(base, thresholds, x, y, dither_strength=18)
+            band = max(0, min(len(colors) - 1, band))
+            pixels[x, y] = colors[band]
+    
     return img
 
-def generate_water(size=128):
-    """Blue water with subtle wave-like patterns"""
+def generate_water(size=128, variant=1):
+    """PS1 water: 4 discrete blue shades with Bayer dither."""
     img = Image.new('RGB', (size, size))
     pixels = img.load()
+    
+    colors = [
+        (10, 40, 100),   # Deep
+        (15, 70, 140),   # Mid
+        (25, 110, 180),  # Light
+        (40, 150, 220),  # Crest
+    ]
+    thresholds = [90, 150, 210]
+    
     for y in range(size):
         for x in range(size):
-            base = 40 + int(20 * np.sin(x * 0.3) * np.cos(y * 0.2))
-            noise = random.randint(-15, 15)
-            b = min(255, max(0, base + 120 + noise))
-            g = min(255, max(0, base + 40 + noise))
-            r = min(255, max(0, base // 4 + noise))
-            pixels[x, y] = (r, g, b)
+            base = (math.sin(x * 0.25 + variant) * 45 +
+                    math.cos(y * 0.18 + variant * 1.3) * 40 +
+                    math.sin((x - y) * 0.12) * 25 +
+                    128)
+            
+            band = discretize_with_dither(base, thresholds, x, y, dither_strength=16)
+            band = max(0, min(len(colors) - 1, band))
+            pixels[x, y] = colors[band]
+    
     return img
 
-def generate_lava(size=128):
-    """Red/orange lava with hot spots"""
+def generate_lava(size=128, variant=1):
+    """PS1 lava: 5 discrete red/orange shades with Bayer dither."""
     img = Image.new('RGB', (size, size))
     pixels = img.load()
+    
+    colors = [
+        (40, 10, 5),     # Crust
+        (100, 20, 5),    # Dark
+        (160, 50, 10),   # Mid
+        (210, 90, 15),   # Hot
+        (255, 150, 30),  # White-hot
+    ]
+    thresholds = [70, 115, 160, 205]
+    
     for y in range(size):
         for x in range(size):
-            base = random.randint(100, 200)
-            noise = random.randint(-40, 40)
-            r = min(255, max(0, base + noise))
-            g = min(255, max(0, base // 3 + noise // 2))
-            b = min(255, max(0, base // 6 + noise // 3))
-            # Hot spots
-            if random.random() < 0.05:
-                r = min(255, r + 55)
-                g = min(255, g + 30)
-            pixels[x, y] = (r, g, b)
+            base = (math.sin(x * 0.12 + variant) * 50 +
+                    math.cos(y * 0.15 + variant * 0.9) * 45 +
+                    math.sin((x + y * 0.5) * 0.08) * 30 +
+                    128)
+            
+            band = discretize_with_dither(base, thresholds, x, y, dither_strength=20)
+            band = max(0, min(len(colors) - 1, band))
+            pixels[x, y] = colors[band]
+    
     return img
 
-def generate_rock(size=128):
-    """Grey/brown rocky texture"""
+def generate_rock(size=128, variant=1):
+    """PS1 rock: 4 discrete grey-brown shades + crack lines."""
     img = Image.new('RGB', (size, size))
     pixels = img.load()
+    
+    colors = [
+        (50, 42, 35),    # Deep shadow
+        (75, 68, 55),    # Dark
+        (100, 92, 78),   # Mid
+        (125, 118, 102), # Light
+    ]
+    thresholds = [80, 130, 180]
+    
     for y in range(size):
         for x in range(size):
-            base = random.randint(60, 120)
-            noise = random.randint(-25, 25)
-            r = min(255, max(0, base + noise))
-            g = min(255, max(0, base - 10 + noise))
-            b = min(255, max(0, base - 20 + noise))
+            base = (math.sin(x * 0.08 + variant) * 35 +
+                    math.cos(y * 0.1 + variant * 1.1) * 30 +
+                    128)
+            
             # Crack lines
-            if random.random() < 0.03:
-                r, g, b = max(0, r - 30), max(0, g - 30), max(0, b - 30)
-            pixels[x, y] = (r, g, b)
+            crack1 = abs(math.sin(x * 0.35 + y * 0.2 + variant)) < 0.035
+            crack2 = abs(math.cos(x * 0.2 - y * 0.3 + variant * 2)) < 0.025
+            
+            if crack1 or crack2:
+                pixels[x, y] = (25, 20, 15)
+            else:
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=14)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
     return img
 
-def generate_sand(size=128):
-    """Yellow/tan sand"""
+def generate_sand(size=128, variant=1):
+    """PS1 sand: 3 discrete tan shades with Bayer dither."""
     img = Image.new('RGB', (size, size))
     pixels = img.load()
+    
+    colors = [
+        (140, 125, 60),   # Dark
+        (175, 155, 85),   # Mid
+        (210, 190, 110),  # Light
+    ]
+    thresholds = [110, 170]
+    
     for y in range(size):
         for x in range(size):
-            base = random.randint(140, 200)
-            noise = random.randint(-20, 20)
-            r = min(255, max(0, base + noise))
-            g = min(255, max(0, base - 20 + noise))
-            b = min(255, max(0, base - 80 + noise))
-            pixels[x, y] = (r, g, b)
-    return img
-
-def generate_snow(size=128):
-    """White snow with subtle grey noise"""
-    img = Image.new('RGB', (size, size))
-    pixels = img.load()
-    for y in range(size):
-        for x in range(size):
-            val = random.randint(220, 255)
-            noise = random.randint(-15, 5)
-            v = min(255, max(200, val + noise))
-            pixels[x, y] = (v, v, v + 5)
-    return img
-
-def generate_metal(size=128):
-    """Grey metal with grid lines"""
-    img = Image.new('RGB', (size, size))
-    draw = ImageDraw.Draw(img)
-    # Base grey
-    for y in range(size):
-        for x in range(size):
-            val = random.randint(100, 160)
-            img.putpixel((x, y), (val, val, val))
-    # Grid lines
-    grid_size = size // 8
-    for i in range(0, size, grid_size):
-        draw.line([(i, 0), (i, size)], fill=(80, 80, 90), width=1)
-        draw.line([(0, i), (size, i)], fill=(80, 80, 90), width=1)
-    return img
-
-def generate_wood(size=128):
-    """Brown wood with grain lines"""
-    img = Image.new('RGB', (size, size))
-    pixels = img.load()
-    for y in range(size):
-        for x in range(size):
-            base = random.randint(80, 140)
-            noise = random.randint(-15, 15)
-            r = min(255, max(0, base + 20 + noise))
-            g = min(255, max(0, base - 10 + noise))
-            b = min(255, max(0, base - 40 + noise))
-            # Grain lines
-            if (y % 8) == 0:
-                r = max(0, r - 20)
-                g = max(0, g - 20)
-            pixels[x, y] = (r, g, b)
-    return img
-
-def generate_dirt(size=128):
-    """Brown dirt with pebbles"""
-    img = Image.new('RGB', (size, size))
-    pixels = img.load()
-    for y in range(size):
-        for x in range(size):
-            base = random.randint(60, 110)
-            noise = random.randint(-20, 20)
-            r = min(255, max(0, base + 30 + noise))
-            g = min(255, max(0, base + 10 + noise))
-            b = min(255, max(0, base - 20 + noise))
+            base = (math.sin(x * 0.2 + variant) * 30 +
+                    math.cos(y * 0.15 + variant * 0.8) * 25 +
+                    128)
+            
             # Pebbles
-            if random.random() < 0.08:
-                r = min(255, r + 40)
-                g = min(255, g + 40)
-                b = min(255, b + 30)
-            pixels[x, y] = (r, g, b)
+            if random.random() < 0.05:
+                pixels[x, y] = (125, 105, 50)
+            else:
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=16)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
     return img
 
-def generate_stone_platform(size=128):
-    """Grey stone with brick-like pattern"""
+def generate_snow(size=128, variant=1):
+    """PS1 snow: 3 discrete white-blue shades."""
     img = Image.new('RGB', (size, size))
-    draw = ImageDraw.Draw(img)
+    pixels = img.load()
+    
+    colors = [
+        (180, 185, 210),  # Shadow
+        (215, 220, 235),  # Mid
+        (245, 248, 255),  # Bright
+    ]
+    thresholds = [120, 190]
+    
+    for y in range(size):
+        for x in range(size):
+            base = (math.sin(x * 0.1 + variant) * 25 +
+                    math.cos(y * 0.12 + variant * 1.5) * 20 +
+                    128)
+            
+            band = discretize_with_dither(base, thresholds, x, y, dither_strength=12)
+            band = max(0, min(len(colors) - 1, band))
+            pixels[x, y] = colors[band]
+    
+    return img
+
+def generate_metal(size=128, variant=1):
+    """PS1 metal: 3 grey shades + grid lines."""
+    img = Image.new('RGB', (size, size))
+    pixels = img.load()
+    
+    colors = [
+        (80, 80, 90),    # Dark
+        (110, 110, 120), # Mid
+        (140, 140, 150), # Light
+    ]
+    thresholds = [110, 170]
+    
+    for y in range(size):
+        for x in range(size):
+            base = (math.sin(x * 0.15 + variant) * 25 +
+                    math.cos(y * 0.2 + variant * 0.6) * 20 +
+                    128)
+            
+            # Grid lines
+            grid = size // 8
+            if x % grid == 0 or y % grid == 0:
+                pixels[x, y] = (55, 55, 65)
+            else:
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=10)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
+    return img
+
+def generate_wood(size=128, variant=1):
+    """PS1 wood: 3 brown shades + grain bands."""
+    img = Image.new('RGB', (size, size))
+    pixels = img.load()
+    
+    colors = [
+        (90, 55, 18),   # Dark
+        (120, 75, 28),  # Mid
+        (150, 95, 38),  # Light
+    ]
+    thresholds = [100, 165]
+    
+    for y in range(size):
+        for x in range(size):
+            # Grain bands
+            band_offset = math.sin(y * 0.4 + variant) * 20
+            base = (band_offset +
+                    math.sin(x * 0.1 + variant * 2) * 15 +
+                    128)
+            
+            # Knots
+            if random.random() < 0.015:
+                pixels[x, y] = (65, 38, 12)
+            else:
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=14)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
+    return img
+
+def generate_dirt(size=128, variant=1):
+    """PS1 dirt: 3 brown shades + pebbles."""
+    img = Image.new('RGB', (size, size))
+    pixels = img.load()
+    
+    colors = [
+        (65, 42, 18),   # Dark
+        (85, 58, 28),   # Mid
+        (110, 75, 38),  # Light
+    ]
+    thresholds = [105, 170]
+    
+    for y in range(size):
+        for x in range(size):
+            base = (math.sin(x * 0.18 + variant) * 25 +
+                    math.cos(y * 0.14 + variant * 1.2) * 20 +
+                    128)
+            
+            # Pebbles
+            if random.random() < 0.04:
+                pixels[x, y] = (130, 110, 70)
+            else:
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=16)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
+    return img
+
+def generate_stone_platform(size=128, variant=1):
+    """PS1 stone bricks: brick pattern with 2 shades."""
+    img = Image.new('RGB', (size, size))
+    pixels = img.load()
+    
     brick_w = size // 4
     brick_h = size // 8
-    for y in range(0, size, brick_h):
-        offset = (y // brick_h % 2) * (brick_w // 2)
-        for x in range(-offset, size, brick_w):
-            grey = random.randint(100, 140)
-            draw.rectangle([x, y, x + brick_w - 2, y + brick_h - 2], fill=(grey, grey, grey - 5))
+    
+    colors = [
+        (100, 95, 90),   # Brick dark
+        (125, 120, 115), # Brick light
+    ]
+    thresholds = [128]
+    
+    for y in range(size):
+        for x in range(size):
+            bx = (x + (y // brick_h % 2) * (brick_w // 2)) % brick_w
+            by = y % brick_h
+            
+            # Mortar
+            if bx == 0 or by == 0:
+                pixels[x, y] = (60, 58, 55)
+            else:
+                # Brick shade with variation
+                base = (math.sin(x * 0.3 + variant) * 20 + 128)
+                band = discretize_with_dither(base, thresholds, x, y, dither_strength=12)
+                band = max(0, min(len(colors) - 1, band))
+                pixels[x, y] = colors[band]
+    
     return img
 
-def generate_checkerboard_alt(size=128):
-    """Checkerboard for lava areas"""
+def generate_checkerboard_alt(size=128, variant=1):
+    """PS1 checkerboard: 2 high-contrast shades for lava areas."""
     img = Image.new('RGB', (size, size))
-    draw = ImageDraw.Draw(img)
-    check_size = size // 8
-    for y in range(0, size, check_size):
-        for x in range(0, size, check_size):
-            if ((x // check_size) + (y // check_size)) % 2 == 0:
-                draw.rectangle([x, y, x + check_size, y + check_size], fill=(180, 60, 20))
+    pixels = img.load()
+    
+    colors = [
+        (145, 30, 10),   # Dark red
+        (200, 200, 190), # Light grey
+    ]
+    thresholds = [128]
+    
+    check = size // 8
+    
+    for y in range(size):
+        for x in range(size):
+            cx = x // check
+            cy = y // check
+            
+            if (cx + cy) % 2 == 0:
+                base = (math.sin(x * 0.2 + variant) * 10 + 80)
             else:
-                draw.rectangle([x, y, x + check_size, y + check_size], fill=(220, 220, 200))
+                base = (math.sin(x * 0.2 + variant) * 10 + 180)
+            
+            band = discretize_with_dither(base, thresholds, x, y, dither_strength=8)
+            band = max(0, min(len(colors) - 1, band))
+            pixels[x, y] = colors[band]
+    
     return img
+
+# ── Main ──
 
 def main():
     output_dir = "/root/.openclaw/workspace/bubsy_texture_injector/packs/tiny_texture_pack_2/textures"
     os.makedirs(output_dir, exist_ok=True)
     
-    print("🔥 Generating PS1-style procedural textures...")
+    print("🔥 Generating AUTHENTIC PS1-style textures...")
+    print("   (Discrete color bands + manual Bayer dither at boundaries)")
     
-    textures = {
-        "grass_01.png": generate_grass(),
-        "grass_02.png": generate_grass(),
-        "grass_03.png": generate_grass(),
-        "grass_04.png": generate_grass(),
-        "water_01.png": generate_water(),
-        "water_02.png": generate_water(),
-        "water_03.png": generate_water(),
-        "lava_01.png": generate_lava(),
-        "lava_02.png": generate_lava(),
-        "lava_03.png": generate_lava(),
-        "rock_01.png": generate_rock(),
-        "rock_02.png": generate_rock(),
-        "rock_03.png": generate_rock(),
-        "rock_04.png": generate_rock(),
-        "sand_01.png": generate_sand(),
-        "sand_02.png": generate_sand(),
-        "sand_03.png": generate_sand(),
-        "snow_01.png": generate_snow(),
-        "snow_02.png": generate_snow(),
-        "metal_01.png": generate_metal(),
-        "metal_02.png": generate_metal(),
-        "metal_03.png": generate_metal(),
-        "wood_01.png": generate_wood(),
-        "wood_02.png": generate_wood(),
-        "dirt_01.png": generate_dirt(),
-        "dirt_02.png": generate_dirt(),
-        "dirt_03.png": generate_dirt(),
-        "checker_alt_01.png": generate_checkerboard_alt(),
+    texture_defs = {
+        "grass_01.png": (generate_grass, 1),
+        "grass_02.png": (generate_grass, 2),
+        "grass_03.png": (generate_grass, 3),
+        "grass_04.png": (generate_grass, 4),
+        "water_01.png": (generate_water, 1),
+        "water_02.png": (generate_water, 2),
+        "water_03.png": (generate_water, 3),
+        "lava_01.png": (generate_lava, 1),
+        "lava_02.png": (generate_lava, 2),
+        "lava_03.png": (generate_lava, 3),
+        "rock_01.png": (generate_rock, 1),
+        "rock_02.png": (generate_rock, 2),
+        "rock_03.png": (generate_rock, 3),
+        "rock_04.png": (generate_rock, 4),
+        "sand_01.png": (generate_sand, 1),
+        "sand_02.png": (generate_sand, 2),
+        "sand_03.png": (generate_sand, 3),
+        "snow_01.png": (generate_snow, 1),
+        "snow_02.png": (generate_snow, 2),
+        "metal_01.png": (generate_metal, 1),
+        "metal_02.png": (generate_metal, 2),
+        "metal_03.png": (generate_metal, 3),
+        "wood_01.png": (generate_wood, 1),
+        "wood_02.png": (generate_wood, 2),
+        "dirt_01.png": (generate_dirt, 1),
+        "dirt_02.png": (generate_dirt, 2),
+        "dirt_03.png": (generate_dirt, 3),
+        "checker_alt_01.png": (generate_checkerboard_alt, 1),
     }
     
-    for filename, img in textures.items():
-        path = os.path.join(output_dir, filename)
-        save_ps1_texture(img, path)
+    for filename, (gen_fn, variant) in texture_defs.items():
+        img = gen_fn(128, variant)
+        png_path = os.path.join(output_dir, filename)
+        save_ps1_texture(img, png_path, num_colors=8)
     
-    print(f"\n✅ Done! Generated {len(textures)} PS1-style textures in {output_dir}/")
+    print(f"\n✅ Done! Generated {len(texture_defs)} authentic PS1-style textures")
+    print(f"   Location: {output_dir}/")
+    print("\n💡 PS1 authenticity achieved via:")
+    print("   • Manually discretizing to 3-5 color bands per texture")
+    print("   • Applying Bayer 4x4 matrix at band boundaries")
+    print("   • Visible checkerboard/dot dither patterns")
+    print("   • Harsh posterization with dithered transitions")
 
 if __name__ == "__main__":
     main()
