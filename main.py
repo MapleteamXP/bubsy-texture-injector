@@ -31,7 +31,7 @@ from PIL import Image, ImageTk
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
 
@@ -289,6 +289,7 @@ class TextureInjectorApp:
 
         try:
             self._set_status("Analyzing ROM...")
+            self._log(f"Opening: {self.iso_path}")
             parser = open_ps1_image(self.iso_path)
             file_count = len(parser.files)
             volume = parser.volume_label or "(no label)"
@@ -299,6 +300,24 @@ class TextureInjectorApp:
             info_text = f"Volume: {volume} | Files: {file_count} | Detected: {self.detected_build}"
             self.rom_info.config(text=info_text, foreground="blue")
             self._log(f"ROM Analysis — Volume: {volume}, Files: {file_count}, Build: {self.detected_build}")
+
+            # Diagnose if 0 files found
+            if file_count == 0:
+                self._log("⚠️ WARNING: 0 files found in ISO tree!")
+                self._log("  Possible causes:")
+                self._log("    - Root directory LBA not found (offset mismatch)")
+                self._log("    - Directory records unreadable")
+                self._log("    - File is not a valid PS1 disc image")
+                self._log("  Raw file info:")
+                import os as _os
+                size_mb = _os.path.getsize(self.iso_path) / (1024*1024)
+                self._log(f"    File size: {size_mb:.1f} MB")
+                self._log(f"    Sector size: {parser._sector_size}, Data offset: 0x{parser._data_offset:X}")
+                
+                # Try to show first few file paths if any raw listing works
+                raw_files = list(parser.files.keys())
+                if raw_files:
+                    self._log(f"  (But {len(raw_files)} entries exist internally?)")
 
             # List some files for debugging
             tmd_files = [f for f in parser.list_files() if f.upper().endswith(".TMD")]
@@ -313,8 +332,11 @@ class TextureInjectorApp:
             self._set_status("ROM analyzed. Select a texture pack.")
 
         except Exception as e:
-            self._log(f"ERROR analyzing ROM: {e}")
-            self.rom_info.config(text=f"Error: {e}", foreground="red")
+            import traceback as _tb
+            err_detail = str(e)
+            self._log(f"ERROR analyzing ROM: {err_detail}")
+            self._log(_tb.format_exc())
+            self.rom_info.config(text=f"Error: {err_detail}", foreground="red")
             self._set_status("Analysis failed")
 
     def _scan_packs(self):
@@ -345,25 +367,45 @@ class TextureInjectorApp:
         if not folder:
             return
         
-        # Copy the folder into packs/
+        # Run copy in background thread to avoid freezing GUI
+        self._set_status("Copying pack folder...")
+        self._log(f"Copying pack from: {folder}")
+        thread = threading.Thread(target=self._copy_pack_folder_worker, args=(folder,), daemon=True)
+        thread.start()
+
+    def _copy_pack_folder_worker(self, src_folder: str):
+        """Background worker for copying pack folders."""
         import shutil
-        dest_name = os.path.basename(folder)
-        dest_path = os.path.join(PACKS_DIR, dest_name)
-        
-        # Handle name collision
-        counter = 1
-        original_dest = dest_path
-        while os.path.exists(dest_path):
-            dest_path = f"{original_dest}_{counter}"
-            counter += 1
-        
         try:
-            shutil.copytree(folder, dest_path)
-            self._log(f"Copied pack folder: {folder} → {dest_path}")
-            self._scan_packs()
-            messagebox.showinfo("Pack Added", f"Pack folder copied to:\n{dest_path}")
+            dest_name = os.path.basename(src_folder)
+            dest_path = os.path.join(PACKS_DIR, dest_name)
+            
+            # Handle name collision
+            counter = 1
+            original_dest = dest_path
+            while os.path.exists(dest_path):
+                dest_path = f"{original_dest}_{counter}"
+                counter += 1
+            
+            shutil.copytree(src_folder, dest_path)
+            
+            # Update UI from main thread
+            self.root.after(0, lambda: self._on_pack_copy_done(f"Copied pack folder: {src_folder} → {dest_path}", dest_path))
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to copy pack folder:\n{e}")
+            self.root.after(0, lambda: self._on_pack_copy_error(f"Failed to copy pack folder: {e}"))
+
+    def _on_pack_copy_done(self, msg: str, dest_path: str):
+        """Called on main thread when pack copy completes."""
+        self._log(msg)
+        self._scan_packs()
+        self._set_status("Pack added successfully")
+        messagebox.showinfo("Pack Added", f"Pack folder copied to:\n{dest_path}")
+
+    def _on_pack_copy_error(self, msg: str):
+        """Called on main thread when pack copy fails."""
+        self._log(msg)
+        self._set_status("Pack copy failed")
+        messagebox.showerror("Error", msg)
 
     def _add_pack_files(self):
         """Browse and select individual texture files to add to a pack."""
@@ -387,53 +429,83 @@ class TextureInjectorApp:
         """Show dialog to choose which pack to add files to."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Add Textures to Pack")
-        dialog.geometry("400x300")
+        dialog.geometry("500x350")
         dialog.transient(self.root)
         dialog.grab_set()
         
-        ttk.Label(dialog, text=f"Add {len(files)} texture file(s) to:").pack(pady=10)
+        ttk.Label(dialog, text=f"Add {len(files)} texture file(s) to:", font=("Segoe UI", 10, "bold")).pack(pady=10)
         
         # List existing packs
-        listbox = tk.Listbox(dialog, height=6)
+        listbox = tk.Listbox(dialog, height=8, font=("Consolas", 10))
         listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         listbox.insert(tk.END, "[ CREATE NEW PACK ]")
         for pack in self.packs:
-            listbox.insert(tk.END, f"{pack.pack_name} ({pack.base_dir})")
+            status = "✅" if pack.valid else "❌"
+            listbox.insert(tk.END, f"{status} {pack.pack_name} ({os.path.basename(pack.base_dir)})")
         
         def on_confirm():
             selection = listbox.curselection()
             if not selection:
                 return
             idx = selection[0]
+            dialog.destroy()
             
-            import shutil
+            # Run in background thread
+            self._set_status("Adding textures...")
+            thread = threading.Thread(target=self._add_files_worker, args=(files, idx), daemon=True)
+            thread.start()
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Confirm", command=on_confirm).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def _add_files_worker(self, files, idx):
+        """Background worker for adding texture files."""
+        import shutil
+        try:
             if idx == 0:
-                # Create new pack
-                name = filedialog.askstring("New Pack Name", "Enter a name for the new pack:")
-                if not name:
-                    dialog.destroy()
-                    return
-                pack_dir = os.path.join(PACKS_DIR, name.replace(" ", "_"))
-                os.makedirs(os.path.join(pack_dir, "textures"), exist_ok=True)
-                # Copy files
-                for f in files:
-                    shutil.copy2(f, os.path.join(pack_dir, "textures"))
-                # Create manifest
-                create_sample_manifest(pack_dir, pack_name=name)
-                self._log(f"Created new pack '{name}' with {len(files)} textures")
+                # Create new pack — need to ask for name on main thread
+                self.root.after(0, lambda: self._ask_new_pack_name(files))
+                return
             else:
                 # Add to existing pack
                 pack = self.packs[idx - 1]  # -1 because of "CREATE NEW" at index 0
                 for f in files:
                     shutil.copy2(f, os.path.join(pack.base_dir, "textures"))
-                self._log(f"Added {len(files)} textures to '{pack.pack_name}'")
-            
-            dialog.destroy()
-            self._scan_packs()
-        
-        ttk.Button(dialog, text="Confirm", command=on_confirm).pack(pady=10)
-        ttk.Button(dialog, text="Cancel", command=dialog.destroy).pack(pady=5)
+                self.root.after(0, lambda: self._on_pack_copy_done(
+                    f"Added {len(files)} textures to '{pack.pack_name}'", 
+                    pack.base_dir
+                ))
+        except Exception as e:
+            self.root.after(0, lambda: self._on_pack_copy_error(f"Failed to add textures: {e}"))
+
+    def _ask_new_pack_name(self, files):
+        """Ask user for new pack name (must run on main thread for dialog)."""
+        name = filedialog.askstring("New Pack Name", "Enter a name for the new pack:")
+        if not name:
+            self._set_status("Pack creation cancelled")
+            return
+        # Run creation in background
+        thread = threading.Thread(target=self._create_new_pack_worker, args=(name, files), daemon=True)
+        thread.start()
+
+    def _create_new_pack_worker(self, name: str, files):
+        """Background worker for creating new pack with files."""
+        import shutil
+        try:
+            pack_dir = os.path.join(PACKS_DIR, name.replace(" ", "_"))
+            os.makedirs(os.path.join(pack_dir, "textures"), exist_ok=True)
+            for f in files:
+                shutil.copy2(f, os.path.join(pack_dir, "textures"))
+            create_sample_manifest(pack_dir, pack_name=name)
+            self.root.after(0, lambda: self._on_pack_copy_done(
+                f"Created new pack '{name}' with {len(files)} textures",
+                pack_dir
+            ))
+        except Exception as e:
+            self.root.after(0, lambda: self._on_pack_copy_error(f"Failed to create pack: {e}"))
 
     def _on_pack_select(self, event):
         selection = self.pack_listbox.curselection()

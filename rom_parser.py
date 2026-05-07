@@ -121,12 +121,58 @@ class ISOParser:
         # Volume label at offset 0x28 (40) for 32 bytes
         self.volume_label = pvd[0x28:0x28 + 32].decode("ascii", errors="ignore").strip()
 
-        # Root directory entry at offset 0x9E (158) — 34 bytes
-        root_entry_raw = pvd[0x9E:0x9E + 34]
-        root_lba = struct.unpack_from("<I", root_entry_raw, 2)[0]
-        root_size = struct.unpack_from("<I", root_entry_raw, 10)[0]
+        # Root directory entry — try BOTH offsets (0x9C and 0x9E)
+        # ISO 9660 standard says 0x9C (156), some implementations use 0x9E (158)
+        root_lba, root_size = self._find_root_directory(pvd)
+
+        if root_lba == 0 or root_size == 0:
+            raise ValueError("Could not locate root directory in ISO 9660 PVD")
 
         self._parse_directory("", root_lba, root_size)
+
+    def _find_root_directory(self, pvd: bytes) -> Tuple[int, int]:
+        """Find the root directory LBA and size from the PVD.
+        
+        Tries offset 0x9C first (ISO 9660 standard), then 0x9E (common alternative).
+        Validates by checking that the resulting LBA points to readable directory data.
+        """
+        for offset in (0x9C, 0x9E):
+            if offset + 34 > len(pvd):
+                continue
+            entry = pvd[offset:offset + 34]
+            lba = struct.unpack_from("<I", entry, 2)[0]
+            size = struct.unpack_from("<I", entry, 10)[0]
+            
+            # Basic sanity checks
+            if lba < 16 or lba > 0xFFFFFFFF // self._sector_size:
+                continue
+            if size == 0 or size > 10 * 1024 * 1024:  # Max 10MB for a directory
+                continue
+            
+            # Verify: try to read the first few bytes at that LBA
+            # A valid directory should start with a record for "."
+            try:
+                test_data = self._read_sector(lba, 1)[:min(size, 64)]
+                if len(test_data) >= 34 and test_data[0] >= 34:
+                    # Check if first entry is "." (current dir)
+                    name_len = test_data[32]
+                    name = test_data[33:33 + name_len].decode("ascii", errors="ignore")
+                    if name == "." or name == "\x00":
+                        return lba, size
+                    # Even if name doesn't match, if record length looks valid, use it
+                    return lba, size
+            except Exception:
+                continue
+        
+        # Fallback: scan the PVD for any directory record-like structure
+        for offset in range(0x80, min(len(pvd) - 34, 0x200)):
+            entry = pvd[offset:offset + 34]
+            lba = struct.unpack_from("<I", entry, 2)[0]
+            size = struct.unpack_from("<I", entry, 10)[0]
+            if lba > 16 and 0 < size < 10 * 1024 * 1024:
+                return lba, size
+        
+        return 0, 0
 
     def _parse_directory(self, path_prefix: str, lba: int, size: int):
         """Recursively parse an ISO 9660 directory table."""
