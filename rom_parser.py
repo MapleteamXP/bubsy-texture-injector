@@ -174,8 +174,21 @@ class ISOParser:
         
         return 0, 0
 
-    def _parse_directory(self, path_prefix: str, lba: int, size: int):
-        """Recursively parse an ISO 9660 directory table."""
+    def _parse_directory(self, path_prefix: str, lba: int, size: int, visited: set = None):
+        """Recursively parse an ISO 9660 directory table.
+        
+        Args:
+            visited: Set of LBAs already visited to prevent infinite recursion
+                     from circular directory references.
+        """
+        if visited is None:
+            visited = set()
+        
+        # Prevent infinite recursion from circular references
+        if lba in visited:
+            return
+        visited.add(lba)
+        
         data = self._read_sector(lba, (size // SECTOR_SIZE_2048) + 1)[:size]
         idx = 0
         while idx < size:
@@ -185,6 +198,10 @@ class ISOParser:
                 continue
             if idx + rec_len > len(data):
                 break
+            if rec_len < 34:
+                # Invalid record — skip to avoid reading garbage
+                idx += 1
+                continue
 
             entry = self._parse_dir_record(data[idx:idx + rec_len], path_prefix)
             idx += rec_len
@@ -194,7 +211,9 @@ class ISOParser:
             logical_path = f"{path_prefix}/{entry.name}".lstrip("/")
             if entry.is_directory:
                 if entry.name not in (".", ".."):
-                    self._parse_directory(logical_path, entry.lba, entry.size)
+                    # Skip if LBA is 0 or same as parent (would loop forever)
+                    if entry.lba != 0 and entry.lba != lba:
+                        self._parse_directory(logical_path, entry.lba, entry.size, visited)
             else:
                 entry.parent_path = path_prefix.lstrip("/")
                 self.files[logical_path] = entry

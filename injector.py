@@ -285,14 +285,22 @@ class TextureInjector:
         flat_prims: List[Tuple[int, int, PrimitivePacket]],
         color_mapper=None,
     ) -> bool:
-        """Inject a replacement texture into a TMD model."""
+        """Inject a replacement texture into a TMD model with PS1 compliance."""
         if not tgt.replacement_tim:
             return False
 
+        # Validate TIM is PS1-compliant BEFORE injection
+        from tim_handler import validate_tim_for_ps1
+        issues = validate_tim_for_ps1(tgt.replacement_tim)
+        if issues:
+            self._log(f"    ⚠️ TIM compliance issues for {tgt.polygon_group}:")
+            for issue in issues:
+                self._log(f"      - {issue}")
+            # Continue anyway but warn — some issues may be acceptable for testing
+
         # Strategy 1: If a color_mapper is attached, try smart surface-type injection
         if color_mapper and tgt.polygon_group:
-            surface = tgt.polygon_group  # e.g. "grass", "lava", "water"
-            # Find flat-shaded primitives whose color matches this surface type
+            surface = tgt.polygon_group
             matched = []
             for oi, pi, pkt in flat_prims:
                 if pkt.color:
@@ -302,23 +310,21 @@ class TextureInjector:
                         matched.append((oi, pi, pkt))
             
             if matched:
-                # Upgrade ALL matched flat-shaded polygons to textured
                 for oi, pi, pkt in matched:
                     n_vert = 4 if pkt.is_quad else 3
-                    uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
+                    uvs = self._generate_uvs(n_vert, tgt.replacement_tim)
                     texpage = self._make_texpage_for_tim(tgt.replacement_tim)
-                    upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=0)
+                    clut = self._make_clut_for_tim(tgt.replacement_tim)
+                    upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=clut)
                 self._log(f"    Smart-mapped {len(matched)} {surface} polygons via color detection")
                 return True
 
         # Strategy 2: If the polygon group already has textured primitives, patch existing
         for oi, pi, pkt in textured_prims:
             new_texpage = self._make_texpage_for_tim(tgt.replacement_tim)
-            new_clut = 0
-            if tgt.replacement_tim.has_clut:
-                new_clut = 0x0000
+            new_clut = self._make_clut_for_tim(tgt.replacement_tim)
             n_vert = 4 if pkt.is_quad else 3
-            uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
+            uvs = self._generate_uvs(n_vert, tgt.replacement_tim)
             patch_texture_reference(pkt, new_texpage, new_clut, uvs)
             return True
 
@@ -326,48 +332,91 @@ class TextureInjector:
         if flat_prims:
             oi, pi, pkt = flat_prims[0]
             n_vert = 4 if pkt.is_quad else 3
-            uvs = self._generate_uvs(n_vert, tgt.replacement_tim.width, tgt.replacement_tim.height)
+            uvs = self._generate_uvs(n_vert, tgt.replacement_tim)
             texpage = self._make_texpage_for_tim(tgt.replacement_tim)
-            upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=0)
+            clut = self._make_clut_for_tim(tgt.replacement_tim)
+            upgrade_flat_to_textured(pkt, uvs, texpage, clut_addr=clut)
             return True
 
         return False
 
-    def _generate_uvs(self, n_vert: int, tex_w: int, tex_h: int) -> List[Tuple[int, int]]:
-        """Generate UV coordinates that tile across the polygon."""
-        # For world-space mapping, generate UVs that cover the full texture
-        # with slight variation based on vertex index
+    def _generate_uvs(self, n_vert: int, tim: "TIMImage") -> List[Tuple[int, int]]:
+        """Generate UV coordinates that map to the full texture.
+        
+        PS1 UV coordinates are 0-255 regardless of texture pixel dimensions.
+        U=0 = left edge, U=255 = right edge of texture
+        V=0 = top edge, V=255 = bottom edge of texture
+        """
         uvs = []
         for i in range(n_vert):
             if n_vert == 3:
-                # Triangle mapping: corners of texture
+                # Triangle: map to texture corners
                 corners = [(0, 0), (255, 0), (128, 255)]
                 uvs.append(corners[i])
             elif n_vert == 4:
-                # Quad mapping: full texture corners
+                # Quad: full texture corners
                 corners = [(0, 0), (255, 0), (255, 255), (0, 255)]
                 uvs.append(corners[i])
             else:
-                # Fallback for unusual vertex counts
+                # Fallback: distribute evenly
                 u = int((i / max(1, n_vert - 1)) * 255)
                 v = int((i / max(1, n_vert - 1)) * 255)
                 uvs.append((u, v))
         return uvs
 
-    def _make_texpage_for_tim(self, tim: TIMImage) -> int:
-        """Construct a basic TexPage register value for the TIM."""
-        # TexPage bits (PS1 GPU):
-        #  bit 0-3  : texture page X base (64×64 word steps) → (vram_x // 64)
-        #  bit 4    : semi-transparent mode
-        #  bit 5-6  : color mode (0=4bpp, 1=8bpp, 2=16bpp)
-        #  bit 7-8  : dither
-        #  bit 9-10 : drawing area
-        # For simplicity we assume the replacement texture will be placed at
-        # a known VRAM position by the emulator / mod loader.
-        mode_bits = tim.bpp_mode  # 0,1,2
-        page_x = (tim.vram_x // 64) & 0x0F
-        texpage = (page_x) | (mode_bits << 5)
+    def _make_texpage_for_tim(self, tim: "TIMImage") -> int:
+        """Construct a proper TexPage register value for the TIM.
+        
+        PS1 TexPage register bits:
+          bit 0-3  : texture page X base (in 64-pixel columns)
+          bit 4    : semi-transparent mode (0=opaque, 1=semi)
+          bit 5-6  : color mode (0=4bpp, 1=8bpp, 2=16bpp)
+          bit 7-9  : dither / draw area (usually 0)
+          bit 10   : Y base (0=0-255, 1=256-511)
+        
+        For replacement textures, we place them at known VRAM positions
+        and compute the texpage accordingly.
+        """
+        from tim_handler import (
+            TIM_MODE_4BPP, TIM_MODE_8BPP, TIM_MODE_16BPP,
+            TPAGE_WIDTH_4BPP_8BPP, TPAGE_WIDTH_16BPP,
+        )
+        
+        # Color mode bits
+        if tim.bpp_mode == TIM_MODE_4BPP:
+            mode_bits = 0
+            col_width = TPAGE_WIDTH_4BPP_8BPP
+        elif tim.bpp_mode == TIM_MODE_8BPP:
+            mode_bits = 1
+            col_width = TPAGE_WIDTH_4BPP_8BPP
+        elif tim.bpp_mode == TIM_MODE_16BPP:
+            mode_bits = 2
+            col_width = TPAGE_WIDTH_16BPP
+        else:
+            mode_bits = 2
+            col_width = TPAGE_WIDTH_16BPP
+
+        # Page X = VRAM X position / column width (4 bits, max 15 = 960 or 1920)
+        page_x = (tim.vram_x // col_width) & 0x0F
+        
+        # Y bit: 0 for Y 0-255, 1 for Y 256-511
+        y_bit = 1 if tim.vram_y >= 256 else 0
+        
+        # Build texpage: page_x | (mode << 5) | (y_bit << 10)
+        texpage = page_x | (mode_bits << 5) | (y_bit << 10)
         return texpage
+
+    def _make_clut_for_tim(self, tim: "TIMImage") -> int:
+        """Construct CLUT address for 4/8bpp TIMs, or 0 for 16bpp."""
+        if not tim.has_clut:
+            return 0
+        # CLUT is stored at a VRAM address.
+        # For simplicity, place CLUT at (0, tim.vram_y + tim.height + 1)
+        # Real implementations would use a VRAM allocator.
+        clut_y = (tim.vram_y + tim.height + 1) & 0x1FF  # 9-bit Y
+        clut_x = 0  # CLUTs usually at X=0
+        # CLUT address format: (y << 6) | x
+        return (clut_y << 6) | clut_x
 
     def _backup_original(self) -> str:
         """Create .bak of the original image."""

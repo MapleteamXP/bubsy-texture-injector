@@ -31,7 +31,7 @@ from PIL import Image, ImageTk
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
 
@@ -377,6 +377,17 @@ class TextureInjectorApp:
         """Background worker for copying pack folders."""
         import shutil
         try:
+            # Prevent copying the packs directory into itself (infinite recursion)
+            src_abs = os.path.abspath(src_folder)
+            packs_abs = os.path.abspath(PACKS_DIR)
+            if src_abs == packs_abs or src_abs.startswith(packs_abs + os.sep):
+                self.root.after(0, lambda: self._on_pack_copy_error(
+                    f"Cannot copy the packs directory into itself!\n"
+                    f"Source: {src_abs}\n"
+                    f"Packs dir: {packs_abs}"
+                ))
+                return
+            
             dest_name = os.path.basename(src_folder)
             dest_path = os.path.join(PACKS_DIR, dest_name)
             
@@ -387,10 +398,23 @@ class TextureInjectorApp:
                 dest_path = f"{original_dest}_{counter}"
                 counter += 1
             
-            shutil.copytree(src_folder, dest_path)
+            # Use dirs_exist_ok=True and ignore dangling symlinks
+            shutil.copytree(
+                src_folder, dest_path,
+                dirs_exist_ok=True,
+                ignore_dangling_symlinks=True,
+            )
             
             # Update UI from main thread
-            self.root.after(0, lambda: self._on_pack_copy_done(f"Copied pack folder: {src_folder} → {dest_path}", dest_path))
+            self.root.after(0, lambda: self._on_pack_copy_done(
+                f"Copied pack folder: {src_folder} → {dest_path}", dest_path
+            ))
+        except RecursionError:
+            self.root.after(0, lambda: self._on_pack_copy_error(
+                "Maximum recursion depth exceeded!\n"
+                "The source folder may contain circular references (symlinks/junctions).\n"
+                "Try copying the folder contents manually instead."
+            ))
         except Exception as e:
             self.root.after(0, lambda: self._on_pack_copy_error(f"Failed to copy pack folder: {e}"))
 
