@@ -31,7 +31,7 @@ from PIL import Image, ImageTk
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
 
@@ -104,7 +104,8 @@ class TextureInjectorApp:
         self.rom_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
         ttk.Button(rom_row, text="📂 Browse…", command=self._browse_rom).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(rom_row, text="🔍 Analyze", command=self._analyze_rom).pack(side=tk.LEFT)
+        ttk.Button(rom_row, text="🔍 Analyze", command=self._analyze_rom).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(rom_row, text="🎨 Rip Original TIMs", command=self._rip_original_tims).pack(side=tk.LEFT)
 
         # ROM info display
         self.rom_info = ttk.Label(rom_frame, text="No ROM loaded. Supported: .iso, .bin/.cue", foreground="gray")
@@ -260,6 +261,81 @@ class TextureInjectorApp:
         self.status_label.config(text=msg)
         self.root.update_idletasks()
 
+    def _rip_original_tims(self):
+        """Extract original TIM textures from the loaded ROM for analysis."""
+        if not self.iso_path or not os.path.exists(self.iso_path):
+            messagebox.showwarning("No ROM", "Please select a ROM file first.")
+            return
+        
+        # Ask where to save
+        output_dir = filedialog.askdirectory(
+            title="Select folder to save extracted TIMs",
+            initialdir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "extracted_tims")
+        )
+        if not output_dir:
+            return
+        
+        self._set_status("Ripping original TIM textures...")
+        self._log("=" * 50)
+        self._log("RIPPING ORIGINAL TIM TEXTURES FROM ROM")
+        self._log(f"ROM: {self.iso_path}")
+        self._log(f"Output: {output_dir}")
+        self._log("=" * 50)
+        
+        # Run in background thread
+        thread = threading.Thread(target=self._rip_tims_worker, args=(output_dir,), daemon=True)
+        thread.start()
+    
+    def _rip_tims_worker(self, output_dir: str):
+        """Background worker for TIM extraction."""
+        try:
+            from extract_tim import extract_tims_from_file, generate_tim_report
+            
+            total, extracted = extract_tims_from_file(
+                self.iso_path,
+                output_dir,
+                min_size=8,
+                max_size=256,
+                export_png=True,
+                export_tim=True,
+            )
+            
+            # Generate report
+            report = generate_tim_report(output_dir)
+            report_path = os.path.join(output_dir, "REPORT.txt")
+            with open(report_path, "w") as f:
+                f.write(report)
+            
+            # Update UI
+            self.root.after(0, lambda: self._on_rip_done(total, extracted, output_dir, report_path))
+            
+        except Exception as e:
+            self.root.after(0, lambda: self._on_rip_error(str(e)))
+    
+    def _on_rip_done(self, total: int, extracted: int, output_dir: str, report_path: str):
+        self._set_status(f"Ripped {extracted} TIMs from ROM")
+        self._log(f"✅ Extraction complete!")
+        self._log(f"   Found: {total} candidates")
+        self._log(f"   Valid TIMs: {extracted}")
+        self._log(f"   Output: {output_dir}")
+        self._log(f"   Report: {report_path}")
+        
+        msg = (
+            f"Extracted {extracted} original TIM textures!\n\n"
+            f"Location: {output_dir}\n"
+            f"Report: {report_path}\n\n"
+            f"Use these as reference for creating replacement textures:\n"
+            f"• Match exact dimensions\n"
+            f"• Use same BPP mode (4/8/16)\n"
+            f"• Preserve CLUT for indexed textures\n"
+            f"• Export as PNG from the .png previews to use as templates"
+        )
+        messagebox.showinfo("TIMs Ripped! 🎨", msg)
+    
+    def _on_rip_error(self, msg: str):
+        self._set_status("TIM rip failed")
+        self._log(f"❌ TIM extraction error: {msg}")
+        messagebox.showerror("Extraction Failed", f"Failed to rip TIMs:\n{msg}")
     def _browse_rom(self):
         path = filedialog.askopenfilename(
             title="Select Bubsy 3D ROM",
@@ -431,6 +507,78 @@ class TextureInjectorApp:
         self._set_status("Pack copy failed")
         messagebox.showerror("Error", msg)
 
+    def _check_pack_ps1_compliance(self, pack: PackInfo) -> str:
+        """Check all textures in a pack for PS1 hardware compliance.
+        
+        Returns a formatted string with compliance status.
+        """
+        try:
+            from tim_handler import validate_tim_for_ps1
+            from PIL import Image as PILImage
+            
+            texture_dir = os.path.join(pack.base_dir, "textures")
+            if not os.path.exists(texture_dir):
+                return "⚠️ PS1 Compliance: No textures folder found"
+            
+            total = 0
+            compliant = 0
+            issues_by_file = {}
+            
+            for filename in os.listdir(texture_dir):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    total += 1
+                    filepath = os.path.join(texture_dir, filename)
+                    try:
+                        img = PILImage.open(filepath)
+                        w, h = img.size
+                        
+                        # Check power-of-2
+                        from tim_handler import _is_power_of_2
+                        if not _is_power_of_2(w) or not _is_power_of_2(h):
+                            issues_by_file[filename] = f"Size {w}x{h} is not power-of-2 (must be 8,16,32,64,128,256)"
+                            continue
+                        
+                        # Check max size
+                        if w > 256 or h > 256:
+                            issues_by_file[filename] = f"Size {w}x{h} exceeds PS1 max 256x256"
+                            continue
+                        
+                        compliant += 1
+                        
+                    except Exception as e:
+                        issues_by_file[filename] = f"Error checking: {e}"
+            
+            if total == 0:
+                return "⚠️ PS1 Compliance: No image textures found in pack"
+            
+            pct = (compliant / total) * 100
+            
+            if pct == 100:
+                status = f"✅ PS1 COMPLIANT: All {total} textures follow PS1 hardware rules"
+            elif pct >= 75:
+                status = f"⚠️ PS1 PARTIAL: {compliant}/{total} textures compliant ({pct:.0f}%)"
+            else:
+                status = f"❌ PS1 ISSUES: Only {compliant}/{total} textures compliant ({pct:.0f}%)"
+            
+            # Show first 3 issues
+            if issues_by_file:
+                issue_lines = ["  Issues found:"]
+                for i, (fname, issue) in enumerate(issues_by_file.items()):
+                    if i >= 3:
+                        remaining = len(issues_by_file) - 3
+                        issue_lines.append(f"    ... and {remaining} more issues")
+                        break
+                    issue_lines.append(f"    • {fname}: {issue}")
+                status += "\n" + "\n".join(issue_lines)
+            
+            # Add VRAM estimate
+            status += f"\n  Recommendation: Use 4bpp for simple textures, 16bpp for complex ones"
+            
+            return status
+            
+        except Exception as e:
+            return f"⚠️ PS1 Compliance check failed: {e}"
+
     def _add_pack_files(self):
         """Browse and select individual texture files to add to a pack."""
         files = filedialog.askopenfilenames(
@@ -543,6 +691,9 @@ class TextureInjectorApp:
         
         # Build details text
         if pack.valid:
+            # Validate PS1 compliance of pack textures
+            compliance_info = self._check_pack_ps1_compliance(pack)
+            
             details = (
                 f"Name: {pack.pack_name}\n"
                 f"Version: {pack.version}\n"
@@ -551,7 +702,8 @@ class TextureInjectorApp:
                 f"Description: {pack.description}\n"
                 f"Textures: {pack.texture_count} files\n"
                 f"Color-mapped surfaces: {len(pack.color_map)}\n"
-                f"Path: {pack.base_dir}"
+                f"Path: {pack.base_dir}\n"
+                f"\n{compliance_info}"
             )
             self.pack_details.config(text=details, foreground="black")
             self._log(f"Selected pack: {pack.pack_name} v{pack.version}")
