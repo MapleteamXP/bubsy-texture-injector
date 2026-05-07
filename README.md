@@ -66,12 +66,15 @@ packs/my_pack/
     ...
 ```
 
-### Included Pack: Tiny Texture Pack 2
+### Included Pack: Tiny Texture Pack 2 (Built-In!)
 
-The default pack uses **Screaming Brain Studios' Tiny Texture Pack 2** (CC0/Public Domain):
-- 480 textures at 512×512, 256×256, 128×128
-- Grass, water, lava, rock, sand, snow, metal, wood, dirt
-- Free for any use!
+The default pack includes **28 procedurally-generated PS1-style textures** right out of the box:
+- 🌿 Grass, 💧 Water, 🔥 Lava, 🪨 Rock, 🏖️ Sand, ❄️ Snow, 🔩 Metal, 🪵 Wood, 🟫 Dirt
+- All 128×128 pixels, PS1-VRAM-optimized
+- **No external download required!**
+
+Want higher quality? The pack also supports **Screaming Brain Studios' Tiny Texture Pack 2** (CC0/Public Domain):
+- 480 hand-crafted textures at 512×512, 256×256, 128×128
 - Source: https://screamingbrainstudios.itch.io/tiny-texture-pack-2
 
 ### Creating Your Own Pack

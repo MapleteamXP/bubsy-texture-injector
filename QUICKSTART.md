@@ -43,35 +43,29 @@
 
 ---
 
-## 📦 Adding Texture Packs
+## 📦 Texture Packs (Built-In!)
 
-### Step 1: Download Tiny Texture Pack 2 (FREE!)
+**Good news:** The injector includes **28 PS1-style textures** out of the box!
+
+Everything works immediately — no downloads needed. The built-in pack covers:
+- 🌿 Grass, 💧 Water, 🔥 Lava, 🪨 Rock, 🏖️ Sand, ❄️ Snow, 🔩 Metal, 🪵 Wood, 🟫 Dirt
+
+### Want More/Higher Quality Textures?
+
+Download **Tiny Texture Pack 2** from itch.io (FREE, CC0):
 - Visit: https://screamingbrainstudios.itch.io/tiny-texture-pack-2
 - Click **"Download Now"** (Name your own price = $0 for free)
 - Choose **128x128.zip** or **256x256.zip**
+- Extract and copy textures to `packs/tiny_texture_pack_2/textures/`
 
-### Step 2: Extract Textures
-```
-packs/tiny_texture_pack_2/textures/
-  grass_01.png
-  grass_02.png
-  water_01.png
-  lava_01.png
-  rock_01.png
-  sand_01.png
-  snow_01.png
-  metal_01.png
-  wood_01.png
-  dirt_01.png
-```
-
-### Step 3: Run the Injector!
-The color mapper will automatically detect polygon colors and apply textures:
+### How It Works
+The color mapper automatically detects polygon colors and applies textures:
 - **Green polygons** → Grass textures
-- **Red/Orange polygons** → Lava textures
+- **Red/Orange polygons** → Lava textures  
 - **Blue polygons** → Water textures
 - **Brown/Gray polygons** → Rock/Dirt textures
 - **White polygons** → Snow textures
+- **Grey checkered** → Stone platforms
 
 ---
 
@@ -120,7 +114,7 @@ The color mapper will automatically detect polygon colors and apply textures:
 | Problem | Solution |
 |---------|----------|
 | "Python not found" | Install Python 3.10+ from python.org, check "Add to PATH" |
-| "No textures found" | Download Tiny Texture Pack 2 and extract to `packs/tiny_texture_pack_2/textures/` |
+| "No textures found" | Built-in textures should work immediately. If you deleted them, re-download the release or regenerate with `python generate_textures.py` |
 | "TMD files not detected" | Make sure your ROM is a valid PS1 disc image (.iso, .bin, .cue) |
 | "Injection failed" | Try Dry Run first. Check log for specific errors. |
 | "Textures look wrong" | Use Manual Override to assign specific textures |

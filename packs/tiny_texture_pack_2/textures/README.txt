@@ -1,61 +1,47 @@
-# Texture Pack: Tiny Texture Pack 2
+# ✅ Built-In Textures!
 
-## Download Required!
+This texture pack now includes **28 procedurally-generated PS1-style textures** out of the box!
 
-This folder is empty because we can't redistribute the texture files.
+No external download needed — the injector works immediately after installation.
 
-**You need to download Tiny Texture Pack 2 from itch.io (it's FREE!):**
+## Included Textures
 
-🔗 **https://screamingbrainstudios.itch.io/tiny-texture-pack-2**
+| Surface Type | Count | Files |
+|-------------|-------|-------|
+| 🌿 Grass | 4 | grass_01.png - grass_04.png |
+| 💧 Water | 3 | water_01.png - water_03.png |
+| 🔥 Lava | 3 | lava_01.png - lava_03.png |
+| 🪨 Rock | 4 | rock_01.png - rock_04.png |
+| 🏖️ Sand | 3 | sand_01.png - sand_03.png |
+| ❄️ Snow | 2 | snow_01.png - snow_02.png |
+| 🔩 Metal | 3 | metal_01.png - metal_03.png |
+| 🪵 Wood | 2 | wood_01.png - wood_02.png |
+| 🟫 Dirt | 3 | dirt_01.png - dirt_03.png |
+| ⬛ Checkerboard | 1 | checker_alt_01.png |
 
-## How to Add Textures
+**Total: 28 textures, all 128×128 pixels, PS1-compatible**
 
-### Step 1: Download
-1. Visit the link above
-2. Click **"Download Now"**
-3. Enter **$0** for free download (or tip the creator!)
-4. Choose a size:
-   - **128x128.zip** (Recommended for PS1 VRAM)
-   - **256x256.zip** (Higher quality, more VRAM)
-   - **512x512.zip** (Best quality, may not fit in PS1 VRAM)
+## Want More Textures?
 
-### Step 2: Extract
-Extract the ZIP file. You'll see folders like:
-```
-SBS - Tiny Texture Pack 2 - 128x128/
-  Brick/
-    Brick1.png, Brick2.png
-  Dirt/
-    Dirt1.png, Dirt2.png
-  Elements/
-    ...
-```
+These built-in textures are **procedurally generated** and work great for testing and basic play. But if you want higher-quality, hand-crafted textures:
 
-### Step 3: Copy to This Folder
-Pick textures for each surface type and copy them here:
+**Download Tiny Texture Pack 2 from itch.io (FREE):**
+🔗 https://screamingbrainstudios.itch.io/tiny-texture-pack-2
 
-```
-packs/tiny_texture_pack_2/textures/
-  grass_01.png      (from Grass/ folder)
-  grass_02.png      (from Grass/ folder)
-  water_01.png      (from Elements/ or Water/ folder)
-  lava_01.png       (from Elements/ or Lava/ folder)
-  rock_01.png       (from Stone/ folder)
-  sand_01.png       (from Dirt/ folder)
-  snow_01.png       (from Elements/ or Snow/ folder)
-  metal_01.png      (from Metal/ folder)
-  wood_01.png       (from Wood/ folder)
-  dirt_01.png       (from Dirt/ folder)
-```
+Just replace the files in this folder with the ones you want!
 
-**Rename files** to match the naming pattern above, or edit `manifest.json` to point to your file names.
+## How Textures Are Made
 
-### Step 4: Verify
-Run the injector. It will scan these textures and show them in the pack list!
+The built-in textures are generated using Python/PIL with PS1-style algorithms:
+- Limited color palettes (256 colors max)
+- Pixel noise for organic surfaces (grass, rock, dirt)
+- Wave patterns for water
+- Grid patterns for metal/stone
+- Brick patterns for stone platforms
+- All sized at 128×128 for optimal PS1 VRAM usage
 
 ## License
 
-Tiny Texture Pack 2 is **CC0 / Public Domain** by Screaming Brain Studios.
-You can use these textures in any project, commercial or non-commercial.
+Built-in textures: **MIT License** — part of the Bubsy 3D Texture Injector project.
 
-**Source:** https://screamingbrainstudios.itch.io/tiny-texture-pack-2
+External Tiny Texture Pack 2: **CC0 / Public Domain** by Screaming Brain Studios.
