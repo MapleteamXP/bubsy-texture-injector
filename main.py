@@ -29,10 +29,237 @@ from color_mapper import ColorMapper, load_color_manifest
 from PIL import Image, ImageTk
 
 
+"""
+main.py — Bubsy 3D Texture Injector GUI Entry Point.
+
+A Windows .exe GUI application for injecting textures into PS1 Bubsy 3D ROMs.
+Supports drag-and-drop ROM loading, selectable texture packs, preview,
+dry-run mode, backup/restore, and progress tracking.
+
+To build as .exe:
+    pip install -r requirements.txt
+    build.bat
+"""
+
+import os
+import sys
+import json
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+from pathlib import Path
+
+# Ensure our modules are importable
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from config import BuildConfig, get_build_by_name, detect_build_from_iso
+from rom_parser import open_ps1_image
+from pack_manager import load_pack, list_available_packs, PackInfo
+from injector import TextureInjector, InjectionResult
+from color_mapper import ColorMapper, load_color_manifest
+from PIL import Image, ImageTk
+
+
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
+
+# ── Bubsy Orange Theme Colors ──
+BUBSY_ORANGE = "#FF8C00"
+BUBSY_DARK_ORANGE = "#E67E00"
+BUBSY_LIGHT_ORANGE = "#FFB84D"
+BUBSY_BLACK = "#1A1A1A"
+BUBSY_DARK_BG = "#2D2D2D"
+BUBSY_CARD_BG = "#FFF8F0"
+BUBSY_SUCCESS = "#2ECC71"
+BUBSY_WARNING = "#F39C12"
+BUBSY_ERROR = "#E74C3C"
+
+
+class ToolTip:
+    """Create a tooltip for any widget."""
+    def __init__(self, widget, text, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tipwindow = None
+        self.id = None
+        widget.bind("<Enter>", self.enter)
+        widget.bind("<Leave>", self.leave)
+    
+    def enter(self, event=None):
+        self.schedule()
+    
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+    
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(self.delay, self.showtip)
+    
+    def unschedule(self):
+        id_ = self.id
+        self.id = None
+        if id_:
+            self.widget.after_cancel(id_)
+    
+    def showtip(self):
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                        background=BUBSY_BLACK, foreground="white",
+                        font=("Segoe UI", 9), padx=8, pady=4,
+                        relief=tk.SOLID, borderwidth=1)
+        label.pack()
+    
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+
+def setup_bubsy_theme(root):
+    """Apply Bubsy orange theme to the application."""
+    style = ttk.Style(root)
+    
+    # Configure theme colors
+    style.configure(".",
+        background=BUBSY_CARD_BG,
+        foreground=BUBSY_BLACK,
+        fieldbackground="white",
+        font=("Segoe UI", 10),
+    )
+    
+    # Frame styling
+    style.configure("TFrame", background=BUBSY_CARD_BG)
+    style.configure("TLabelframe", background=BUBSY_CARD_BG, borderwidth=2)
+    style.configure("TLabelframe.Label",
+        background=BUBSY_ORANGE,
+        foreground="white",
+        font=("Segoe UI", 10, "bold"),
+        padding=(10, 2),
+    )
+    
+    # Button styling - Orange with black text
+    style.configure("TButton",
+        background=BUBSY_ORANGE,
+        foreground=BUBSY_BLACK,
+        font=("Segoe UI", 10, "bold"),
+        padding=(8, 4),
+    )
+    style.map("TButton",
+        background=[("active", BUBSY_DARK_ORANGE), ("pressed", BUBSY_DARK_ORANGE)],
+        foreground=[("active", BUBSY_BLACK), ("pressed", BUBSY_BLACK)],
+    )
+    
+    # Action button - Bigger, more prominent
+    style.configure("Action.TButton",
+        background=BUBSY_ORANGE,
+        foreground=BUBSY_BLACK,
+        font=("Segoe UI", 12, "bold"),
+        padding=(15, 8),
+    )
+    style.map("Action.TButton",
+        background=[("active", BUBSY_DARK_ORANGE), ("pressed", "#CC7000")],
+    )
+    
+    # Entry styling
+    style.configure("TEntry",
+        fieldbackground="white",
+        foreground=BUBSY_BLACK,
+        insertcolor=BUBSY_BLACK,
+    )
+    
+    # Listbox styling (using tk not ttk, so configure directly)
+    # Progress bar
+    style.configure("Horizontal.TProgressbar",
+        background=BUBSY_ORANGE,
+        troughcolor="#FFE0B2",
+        borderwidth=0,
+    )
+    
+    # Combobox
+    style.configure("TCombobox",
+        fieldbackground="white",
+        foreground=BUBSY_BLACK,
+        background=BUBSY_ORANGE,
+    )
+    
+    # Checkbutton
+    style.configure("TCheckbutton",
+        background=BUBSY_CARD_BG,
+        foreground=BUBSY_BLACK,
+    )
+    
+    # Label styling
+    style.configure("Title.TLabel",
+        background=BUBSY_CARD_BG,
+        foreground=BUBSY_ORANGE,
+        font=("Segoe UI", 16, "bold"),
+    )
+    style.configure("Subtitle.TLabel",
+        background=BUBSY_CARD_BG,
+        foreground="#666666",
+        font=("Segoe UI", 10, "italic"),
+    )
+    style.configure("Status.TLabel",
+        background=BUBSY_CARD_BG,
+        foreground=BUBSY_BLACK,
+        font=("Segoe UI", 10, "bold"),
+    )
+    
+    # Treeview
+    style.configure("Treeview",
+        background="white",
+        foreground=BUBSY_BLACK,
+        fieldbackground="white",
+        rowheight=25,
+    )
+    style.configure("Treeview.Heading",
+        background=BUBSY_ORANGE,
+        foreground=BUBSY_BLACK,
+        font=("Segoe UI", 10, "bold"),
+    )
+    style.map("Treeview",
+        background=[("selected", BUBSY_LIGHT_ORANGE)],
+        foreground=[("selected", BUBSY_BLACK)],
+    )
+    
+    # Notebook (tabs)
+    style.configure("TNotebook",
+        background=BUBSY_CARD_BG,
+        tabmargins=(2, 5, 2, 0),
+    )
+    style.configure("TNotebook.Tab",
+        background="#FFE0B2",
+        foreground=BUBSY_BLACK,
+        font=("Segoe UI", 10, "bold"),
+        padding=(15, 5),
+    )
+    style.map("TNotebook.Tab",
+        background=[("selected", BUBSY_ORANGE), ("active", BUBSY_LIGHT_ORANGE)],
+        foreground=[("selected", BUBSY_BLACK)],
+        expand=[("selected", (2, 5, 2, 0))],
+    )
+    
+    # Scrollbar
+    style.configure("TScrollbar",
+        background=BUBSY_ORANGE,
+        troughcolor="#FFE0B2",
+    )
+    
+    # Root background
+    root.configure(bg=BUBSY_CARD_BG)
+    
+    return style
 
 
 def _load_bubsy_bg(root):
@@ -74,57 +301,163 @@ class TextureInjectorApp:
 
         self._build_ui()
         self._scan_packs()
+        
+        # Keyboard shortcuts for power users
+        self._setup_keyboard_shortcuts()
+
+    def _setup_keyboard_shortcuts(self):
+        """Bind keyboard shortcuts for common actions."""
+        self.root.bind("<Control-o>", lambda e: self._browse_rom())
+        self.root.bind("<Control-O>", lambda e: self._browse_rom())
+        self.root.bind("<Control-i>", lambda e: self._run_injection() if self.iso_path and self.selected_pack else None)
+        self.root.bind("<Control-I>", lambda e: self._run_injection() if self.iso_path and self.selected_pack else None)
+        self.root.bind("<Control-r>", lambda e: self._scan_packs())
+        self.root.bind("<Control-R>", lambda e: self._scan_packs())
+        self.root.bind("<F1>", lambda e: self._show_help())
+        self.root.bind("<Control-h>", lambda e: self._show_help())
+        self.root.bind("<Control-H>", lambda e: self._show_help())
+        self._log("Keyboard shortcuts: Ctrl+O (Open ROM), Ctrl+I (Inject), Ctrl+R (Refresh), F1 (Help)")
 
     # ── UI Construction ──
     def _build_ui(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"))
-        style.configure("Subtitle.TLabel", font=("Segoe UI", 10, "italic"))
-        style.configure("Action.TButton", font=("Segoe UI", 10, "bold"))
+        # Apply Bubsy orange theme
+        style = setup_bubsy_theme(self.root)
 
-        # Main container with padding
-        main = ttk.Frame(self.root, padding="10")
-        main.pack(fill=tk.BOTH, expand=True)
+        # Main container with Bubsy background
+        main = tk.Frame(self.root, bg=BUBSY_CARD_BG)
+        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # === HEADER ===
-        header = ttk.Frame(main)
-        header.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(header, text="🐱 Bubsy 3D Texture Injector", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, text="PS1 ROM Texture Enhancement Tool", style="Subtitle.TLabel").pack(side=tk.LEFT, padx=(10, 0))
+        header = tk.Frame(main, bg=BUBSY_ORANGE)
+        header.pack(fill=tk.X, pady=(0, 15), ipady=8)
+        
+        title_label = tk.Label(header, text="🐱 Bubsy 3D Texture Injector",
+                              bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                              font=("Segoe UI", 18, "bold"))
+        title_label.pack(side=tk.LEFT, padx=15)
+        
+        subtitle = tk.Label(header, text=f"v{APP_VERSION} | PS1 Hardware Failproof",
+                           bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                           font=("Segoe UI", 10))
+        subtitle.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Help button
+        help_btn = tk.Button(header, text="❓ Help", command=self._show_help,
+                           bg=BUBSY_BLACK, fg="white",
+                           font=("Segoe UI", 9, "bold"),
+                           relief=tk.FLAT, padx=10, cursor="hand2")
+        help_btn.pack(side=tk.RIGHT, padx=15)
+        ToolTip(help_btn, "Click for step-by-step usage guide")
+
+        # === QUICK START SECTION (Beginner-Friendly) ===
+        quick_frame = tk.LabelFrame(main, text="🚀 Quick Start (3 Easy Steps)",
+                                   bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                   font=("Segoe UI", 11, "bold"),
+                                   padx=10, pady=10)
+        quick_frame.pack(fill=tk.X, pady=(0, 15))
+
+        quick_steps = tk.Frame(quick_frame, bg=BUBSY_CARD_BG)
+        quick_steps.pack(fill=tk.X)
+
+        # Step 1
+        step1 = tk.Frame(quick_steps, bg=BUBSY_CARD_BG)
+        step1.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        tk.Label(step1, text="1", bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                font=("Segoe UI", 14, "bold"), width=2).pack(side=tk.LEFT)
+        tk.Label(step1, text="Load ROM", bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Label(step1, text="Select your Bubsy 3D ISO/BIN", bg=BUBSY_CARD_BG,
+                fg="#666666", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+
+        # Arrow
+        tk.Label(quick_steps, text="→", bg=BUBSY_CARD_BG, fg=BUBSY_ORANGE,
+                font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT, padx=5)
+
+        # Step 2
+        step2 = tk.Frame(quick_steps, bg=BUBSY_CARD_BG)
+        step2.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        tk.Label(step2, text="2", bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                font=("Segoe UI", 14, "bold"), width=2).pack(side=tk.LEFT)
+        tk.Label(step2, text="Pick Pack", bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Label(step2, text="Choose a texture pack", bg=BUBSY_CARD_BG,
+                fg="#666666", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+
+        # Arrow
+        tk.Label(quick_steps, text="→", bg=BUBSY_CARD_BG, fg=BUBSY_ORANGE,
+                font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT, padx=5)
+
+        # Step 3
+        step3 = tk.Frame(quick_steps, bg=BUBSY_CARD_BG)
+        step3.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        tk.Label(step3, text="3", bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                font=("Segoe UI", 14, "bold"), width=2).pack(side=tk.LEFT)
+        tk.Label(step3, text="INJECT!", bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Label(step3, text="Click the big orange button", bg=BUBSY_CARD_BG,
+                fg="#666666", font=("Segoe UI", 9)).pack(side=tk.LEFT)
 
         # === ROM SECTION ===
-        rom_frame = ttk.LabelFrame(main, text="Step 1: Load Bubsy 3D ROM", padding="10")
+        rom_frame = tk.LabelFrame(main, text="Step 1: Load Bubsy 3D ROM",
+                                 bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                 font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         rom_frame.pack(fill=tk.X, pady=(0, 10))
 
-        rom_row = ttk.Frame(rom_frame)
+        rom_row = tk.Frame(rom_frame, bg=BUBSY_CARD_BG)
         rom_row.pack(fill=tk.X)
 
         self.rom_entry = ttk.Entry(rom_row, state="readonly")
         self.rom_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
-        ttk.Button(rom_row, text="📂 Browse…", command=self._browse_rom).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(rom_row, text="🔍 Analyze", command=self._analyze_rom).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(rom_row, text="🎨 Rip Original TIMs", command=self._rip_original_tims).pack(side=tk.LEFT)
+        browse_btn = ttk.Button(rom_row, text="📂 Browse…", command=self._browse_rom)
+        browse_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(browse_btn, "Select your Bubsy 3D ROM file (.iso, .bin, .cue, .chd)")
+
+        analyze_btn = ttk.Button(rom_row, text="🔍 Analyze", command=self._analyze_rom)
+        analyze_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(analyze_btn, "Scan the ROM to find TMD models and TIM textures")
+
+        rip_btn = ttk.Button(rom_row, text="🎨 Rip Original TIMs", command=self._rip_original_tims)
+        rip_btn.pack(side=tk.LEFT)
+        ToolTip(rip_btn, "Extract original TIM textures from the ROM for reference")
 
         # ROM info display
-        self.rom_info = ttk.Label(rom_frame, text="No ROM loaded. Supported: .iso, .bin/.cue", foreground="gray")
-        self.rom_info.pack(anchor=tk.W, pady=(5, 0))
+        self.rom_info = tk.Label(rom_frame, text="No ROM loaded. Supported: .iso, .bin/.cue",
+                                bg=BUBSY_CARD_BG, fg="#999999", font=("Segoe UI", 10))
+        self.rom_info.pack(anchor=tk.W, pady=(8, 0))
+
+        # Smart Tip Banner
+        self.smart_tip = tk.Label(rom_frame, text="💡 TIP: Start by clicking 'Browse' to load your ROM!",
+                                 bg=BUBSY_LIGHT_ORANGE, fg=BUBSY_BLACK,
+                                 font=("Segoe UI", 9, "bold"), padx=10, pady=5)
+        self.smart_tip.pack(fill=tk.X, pady=(8, 0))
 
         # === PACK SECTION ===
-        pack_frame = ttk.LabelFrame(main, text="Step 2: Select Texture Pack", padding="10")
+        pack_frame = tk.LabelFrame(main, text="Step 2: Select Texture Pack",
+                                  bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                  font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         pack_frame.pack(fill=tk.X, pady=(0, 10))
 
-        pack_top = ttk.Frame(pack_frame)
+        pack_top = tk.Frame(pack_frame, bg=BUBSY_CARD_BG)
         pack_top.pack(fill=tk.X)
 
-        ttk.Label(pack_top, text="Available Packs:").pack(side=tk.LEFT)
-        ttk.Button(pack_top, text="➕ Add Pack Folder…", command=self._add_pack_folder).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Button(pack_top, text="📁 Add Pack Files…", command=self._add_pack_files).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(pack_top, text="🔄 Refresh", command=self._scan_packs).pack(side=tk.RIGHT)
+        tk.Label(pack_top, text="Available Packs:", bg=BUBSY_CARD_BG,
+                fg=BUBSY_BLACK, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        
+        add_pack_btn = ttk.Button(pack_top, text="➕ Add Pack Folder…", command=self._add_pack_folder)
+        add_pack_btn.pack(side=tk.LEFT, padx=(10, 0))
+        ToolTip(add_pack_btn, "Copy a texture pack folder into the injector")
+        
+        add_files_btn = ttk.Button(pack_top, text="📁 Add Pack Files…", command=self._add_pack_files)
+        add_files_btn.pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(add_files_btn, "Add individual texture images to a pack")
+        
+        refresh_btn = ttk.Button(pack_top, text="🔄 Refresh", command=self._scan_packs)
+        refresh_btn.pack(side=tk.RIGHT)
+        ToolTip(refresh_btn, "Rescan the packs folder for new packs")
 
         # Pack list with scrollbar
-        pack_list_frame = ttk.Frame(pack_frame)
+        pack_list_frame = tk.Frame(pack_frame, bg=BUBSY_CARD_BG)
         pack_list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         scrollbar = ttk.Scrollbar(pack_list_frame)
@@ -136,105 +469,163 @@ class TextureInjectorApp:
             height=4,
             font=("Consolas", 10),
             selectmode=tk.SINGLE,
+            bg="white",
+            fg=BUBSY_BLACK,
+            selectbackground=BUBSY_LIGHT_ORANGE,
+            selectforeground=BUBSY_BLACK,
         )
         self.pack_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.pack_listbox.yview)
         self.pack_listbox.bind("<<ListboxSelect>>", self._on_pack_select)
 
         # Pack details
-        self.pack_details = ttk.Label(pack_frame, text="Select a pack to view details", wraplength=900, foreground="gray")
-        self.pack_details.pack(anchor=tk.W, pady=(5, 0))
+        self.pack_details = tk.Label(pack_frame, text="Select a pack to view PS1 compliance details",
+                                    bg=BUBSY_CARD_BG, fg="#999999",
+                                    wraplength=900, font=("Segoe UI", 10))
+        self.pack_details.pack(anchor=tk.W, pady=(8, 0))
 
         # === COLOR MAPPING SECTION ===
-        color_frame = ttk.LabelFrame(main, text="Step 3: Color-to-Texture Mapping (Smart Injection)", padding="10")
+        color_frame = tk.LabelFrame(main, text="Step 3: Smart Color Mapping (Auto-Detect)",
+                                   bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                   font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         color_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.color_status = ttk.Label(color_frame, text="Load a ROM and select a pack to enable smart color mapping", foreground="gray")
+        self.color_status = tk.Label(color_frame,
+                                    text="💡 Load a ROM and select a pack to enable smart color mapping",
+                                    bg=BUBSY_CARD_BG, fg="#999999", font=("Segoe UI", 10))
         self.color_status.pack(anchor=tk.W)
 
-        color_btn_row = ttk.Frame(color_frame)
-        color_btn_row.pack(fill=tk.X, pady=(5, 0))
+        color_btn_row = tk.Frame(color_frame, bg=BUBSY_CARD_BG)
+        color_btn_row.pack(fill=tk.X, pady=(8, 0))
 
-        ttk.Button(color_btn_row, text="🎨 Preview Color Map", command=self._preview_color_map).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(color_btn_row, text="⚙️ Configure Mapping", command=self._open_color_config).pack(side=tk.LEFT)
+        preview_btn = ttk.Button(color_btn_row, text="🎨 Preview Color Map", command=self._preview_color_map)
+        preview_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(preview_btn, "See how polygon colors map to textures before injecting")
+        
+        config_btn = ttk.Button(color_btn_row, text="⚙️ Configure Mapping", command=self._open_color_config)
+        config_btn.pack(side=tk.LEFT)
+        ToolTip(config_btn, "Adjust color ranges for surface type detection")
 
         # === OPTIONS SECTION ===
-        opts_frame = ttk.LabelFrame(main, text="Options", padding="10")
+        opts_frame = tk.LabelFrame(main, text="Options",
+                                  bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                  font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         opts_frame.pack(fill=tk.X, pady=(0, 10))
 
-        opts_grid = ttk.Frame(opts_frame)
+        opts_grid = tk.Frame(opts_frame, bg=BUBSY_CARD_BG)
         opts_grid.pack(fill=tk.X)
 
         # Dry run
         self.dry_run_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts_grid, text="Dry Run (preview only, no changes)", variable=self.dry_run_var).grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        dry_cb = tk.Checkbutton(opts_grid, text="Dry Run (preview only, no changes)",
+                               variable=self.dry_run_var,
+                               bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                               font=("Segoe UI", 10), selectcolor=BUBSY_CARD_BG)
+        dry_cb.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        ToolTip(dry_cb, "Test injection without modifying your ROM (safe mode)")
 
         # Backup
         self.backup_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts_grid, text="Create .bak backup", variable=self.backup_var).grid(row=0, column=1, sticky=tk.W)
+        backup_cb = tk.Checkbutton(opts_grid, text="Create .bak backup",
+                                  variable=self.backup_var,
+                                  bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                  font=("Segoe UI", 10), selectcolor=BUBSY_CARD_BG)
+        backup_cb.grid(row=0, column=1, sticky=tk.W)
+        ToolTip(backup_cb, "Keep a backup of your original ROM before modifying")
 
         # Texture size
-        ttk.Label(opts_grid, text="Texture Size:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        tk.Label(opts_grid, text="Texture Size:", bg=BUBSY_CARD_BG,
+                fg=BUBSY_BLACK, font=("Segoe UI", 10)).grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
         self.texture_size = ttk.Combobox(opts_grid, values=[64, 128, 256], width=8, state="readonly")
         self.texture_size.set(128)
-        self.texture_size.grid(row=1, column=1, sticky=tk.W, pady=(5, 0))
+        self.texture_size.grid(row=1, column=1, sticky=tk.W, pady=(8, 0))
+        ToolTip(self.texture_size, "PS1 texture size in pixels (must be power of 2)")
 
         # Color depth
-        ttk.Label(opts_grid, text="Color Depth:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        tk.Label(opts_grid, text="Color Depth:", bg=BUBSY_CARD_BG,
+                fg=BUBSY_BLACK, font=("Segoe UI", 10)).grid(row=2, column=0, sticky=tk.W, pady=(8, 0))
         self.color_depth = ttk.Combobox(opts_grid, values=["4bpp", "8bpp", "16bpp"], width=8, state="readonly")
         self.color_depth.set("16bpp")
-        self.color_depth.grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
+        self.color_depth.grid(row=2, column=1, sticky=tk.W, pady=(8, 0))
+        ToolTip(self.color_depth, "PS1 color depth: 4bpp=saves VRAM, 16bpp=best quality")
 
         # === ACTION BUTTONS ===
-        action_frame = ttk.Frame(main)
+        action_frame = tk.Frame(main, bg=BUBSY_CARD_BG)
         action_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.inject_btn = ttk.Button(
+        self.inject_btn = tk.Button(
             action_frame,
             text="🚀 INJECT TEXTURES",
             command=self._run_injection,
-            style="Action.TButton",
+            bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+            font=("Segoe UI", 14, "bold"),
+            padx=30, pady=12,
+            relief=tk.RAISED,
+            borderwidth=3,
+            cursor="hand2",
+            state=tk.DISABLED,
         )
-        self.inject_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self.inject_btn.state(["disabled"])
+        self.inject_btn.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.inject_btn, "Apply textures to your ROM! (Enable by loading ROM + selecting pack)")
 
-        ttk.Button(action_frame, text="💾 Save Color Map Config", command=self._save_color_config).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(action_frame, text="📋 Load Color Map Config", command=self._load_color_config).pack(side=tk.LEFT)
+        save_cfg_btn = ttk.Button(action_frame, text="💾 Save Color Map", command=self._save_color_config)
+        save_cfg_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(save_cfg_btn, "Save current color mapping configuration to JSON")
+        
+        load_cfg_btn = ttk.Button(action_frame, text="📋 Load Color Map", command=self._load_color_config)
+        load_cfg_btn.pack(side=tk.LEFT)
+        ToolTip(load_cfg_btn, "Load a previously saved color mapping configuration")
 
         # === PROGRESS ===
-        prog_frame = ttk.LabelFrame(main, text="Progress", padding="10")
+        prog_frame = tk.LabelFrame(main, text="Progress",
+                                  bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                  font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         prog_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(prog_frame, variable=self.progress_var, maximum=100, mode="determinate")
-        self.progress_bar.pack(fill=tk.X, pady=(0, 5))
+        self.progress_bar.pack(fill=tk.X, pady=(0, 8))
 
-        self.status_label = ttk.Label(prog_frame, text="Ready")
+        self.status_label = tk.Label(prog_frame, text="Ready",
+                                      bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                      font=("Segoe UI", 10, "bold"))
         self.status_label.pack(anchor=tk.W)
 
         # === LOG CONSOLE ===
-        log_frame = ttk.LabelFrame(main, text="Log", padding="10")
+        log_frame = tk.LabelFrame(main, text="Activity Log",
+                                 bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                 font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = scrolledtext.ScrolledText(
             log_frame,
             wrap=tk.WORD,
             font=("Consolas", 9),
-            height=12,
+            height=10,
+            bg=BUBSY_BLACK,
+            fg="#00FF00",  # Green terminal text
+            insertbackground="white",
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
-        self.log_text.insert(tk.END, "Welcome to Bubsy 3D Texture Injector!\n")
-        self.log_text.insert(tk.END, "Load a ROM, select a texture pack, and click INJECT!\n")
+        self.log_text.insert(tk.END, "🐱 Welcome to Bubsy 3D Texture Injector!\n")
+        self.log_text.insert(tk.END, "Step 1: Load ROM  →  Step 2: Select Pack  →  Step 3: INJECT!\n")
+        self.log_text.insert(tk.END, "-" * 50 + "\n")
         self.log_text.config(state=tk.DISABLED)
 
         # === MANUAL TEXTURE OVERRIDE SECTION ===
-        manual_frame = ttk.LabelFrame(main, text="🛡️ MANUAL OVERRIDE (Failsafe Mode)", padding="10")
+        manual_frame = tk.LabelFrame(main, text="🛡️ Manual Override (Fix Auto-Detect Mistakes)",
+                                    bg=BUBSY_CARD_BG, fg=BUBSY_BLACK,
+                                    font=("Segoe UI", 11, "bold"), padx=10, pady=10)
         manual_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(manual_frame, text="When auto-mapping is unsure, YOU decide what texture goes where!", 
-                 foreground="#DC143C", font=("Segoe UI", 9, "bold")).pack(anchor=tk.W)
-        ttk.Label(manual_frame, text="⚠️ Use this for: checkerboard lava, blue mountains, orange ground — anything the auto-detect got wrong!", 
-                 foreground="gray").pack(anchor=tk.W, pady=(0, 5))
+        tk.Label(manual_frame,
+                text="When auto-mapping is unsure, YOU decide what texture goes where!",
+                bg=BUBSY_CARD_BG, fg=BUBSY_ORANGE,
+                font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+        tk.Label(manual_frame,
+                text="⚠️ Use this for: checkerboard lava, blue mountains, orange ground — anything the auto-detect got wrong!",
+                bg=BUBSY_CARD_BG, fg="#666666",
+                font=("Segoe UI", 9)).pack(anchor=tk.W, pady=(0, 8))
 
         self.manual_tree = ttk.Treeview(manual_frame, columns=("file", "surface", "texture"), show="headings", height=4)
         self.manual_tree.heading("file", text="TMD File")
@@ -242,11 +633,20 @@ class TextureInjectorApp:
         self.manual_tree.heading("texture", text="Assigned Texture")
         self.manual_tree.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        manual_btn_row = ttk.Frame(manual_frame)
+        manual_btn_row = tk.Frame(manual_frame, bg=BUBSY_CARD_BG)
         manual_btn_row.pack(fill=tk.X)
-        ttk.Button(manual_btn_row, text="🔍 Scan TMD Files", command=self._scan_tmd_manual).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(manual_btn_row, text="📝 Assign Texture", command=self._manual_assign_texture).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(manual_btn_row, text="❌ Clear Overrides", command=self._clear_manual).pack(side=tk.LEFT)
+        
+        scan_btn = ttk.Button(manual_btn_row, text="🔍 Scan TMD Files", command=self._scan_tmd_manual)
+        scan_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(scan_btn, "Find all TMD models in the ROM and detect their surface colors")
+        
+        assign_btn = ttk.Button(manual_btn_row, text="📝 Assign Texture", command=self._manual_assign_texture)
+        assign_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(assign_btn, "Manually assign a texture file to a specific TMD")
+        
+        clear_btn = ttk.Button(manual_btn_row, text="❌ Clear Overrides", command=self._clear_manual)
+        clear_btn.pack(side=tk.LEFT)
+        ToolTip(clear_btn, "Remove all manual texture assignments")
 
         self.manual_overrides: dict[str, str] = {}  # iso_path -> texture_path
 
@@ -258,7 +658,17 @@ class TextureInjectorApp:
         self.log_text.config(state=tk.DISABLED)
 
     def _set_status(self, msg: str):
+        """Update status label with color coding."""
         self.status_label.config(text=msg)
+        # Color code based on status content
+        if any(word in msg.lower() for word in ["error", "fail", "invalid", "broken"]):
+            self.status_label.config(fg=BUBSY_ERROR)
+        elif any(word in msg.lower() for word in ["success", "done", "complete", "ready"]):
+            self.status_label.config(fg=BUBSY_SUCCESS)
+        elif any(word in msg.lower() for word in ["warning", "caution", "careful"]):
+            self.status_label.config(fg=BUBSY_WARNING)
+        else:
+            self.status_label.config(fg=BUBSY_BLACK)
         self.root.update_idletasks()
 
     def _rip_original_tims(self):
@@ -744,11 +1154,74 @@ class TextureInjectorApp:
 
         self._update_inject_button()
 
+    def _show_help(self):
+        """Show a help dialog with step-by-step instructions."""
+        help_text = """🐱 Bubsy 3D Texture Injector — Quick Guide
+
+STEP 1: LOAD YOUR ROM
+  • Click "Browse" and select your Bubsy 3D .iso, .bin, .cue, or .chd file
+  • Click "Analyze" to scan the ROM for TMD models and TIM textures
+  • (Optional) Click "Rip Original TIMs" to extract original textures for reference
+
+STEP 2: SELECT A TEXTURE PACK
+  • Choose from available packs in the list
+  • Or click "Add Pack Folder" to import a new pack
+  • PS1 compliance info shows automatically when you select a pack
+
+STEP 3: CONFIGURE (Optional)
+  • Use "Preview Color Map" to see auto-detected surface mappings
+  • Use Manual Override if auto-detect gets colors wrong
+  • Adjust Texture Size and Color Depth if needed
+  • Keep "Dry Run" checked first time to test safely
+
+STEP 4: INJECT!
+  • Click the big orange "INJECT TEXTURES" button
+  • The tool will backup your ROM, convert textures to TIM format,
+    and patch them into the game
+  • Test the patched ROM in DuckStation first, then real hardware!
+
+TIPS:
+  • Use 4bpp for simple textures (grass, dirt) to save VRAM
+  • Use 16bpp for complex textures (metal, water) for best quality
+  • Match original TIM dimensions for best compatibility
+  • Keep total VRAM under 1.5MB for Bubsy 3D safety
+
+Need more help? Check README.md or visit:
+https://github.com/MapleteamXP/bubsy-texture-injector
+"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Help & Quick Start Guide")
+        dialog.geometry("650x550")
+        dialog.configure(bg=BUBSY_CARD_BG)
+        
+        tk.Label(dialog, text="🐱 Bubsy 3D Texture Injector Help",
+                bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                font=("Segoe UI", 14, "bold"), padx=15, pady=10).pack(fill=tk.X)
+        
+        text = scrolledtext.ScrolledText(dialog, wrap=tk.WORD,
+                                         font=("Segoe UI", 10),
+                                         bg="white", fg=BUBSY_BLACK,
+                                         padx=10, pady=10)
+        text.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        text.insert(tk.END, help_text)
+        text.config(state=tk.DISABLED)
+        
+        ttk.Button(dialog, text="Got it!", command=dialog.destroy).pack(pady=10)
+
+    def _update_smart_tip(self, message: str, color: str = BUBSY_LIGHT_ORANGE):
+        """Update the smart tip banner with guidance."""
+        self.smart_tip.config(text=f"💡 {message}", bg=color)
+
     def _update_inject_button(self):
         if self.iso_path and self.selected_pack:
-            self.inject_btn.state(["!disabled"])
+            self.inject_btn.config(state=tk.NORMAL)
+            self._update_smart_tip("Ready! Click the big orange button to inject textures!", "#90EE90")
         else:
-            self.inject_btn.state(["disabled"])
+            self.inject_btn.config(state=tk.DISABLED)
+            if not self.iso_path:
+                self._update_smart_tip("Start by loading a ROM file (Step 1)")
+            elif not self.selected_pack:
+                self._update_smart_tip("Now select a texture pack (Step 2)")
 
     def _preview_color_map(self):
         if not self.color_mapper:
