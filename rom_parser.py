@@ -12,6 +12,8 @@ Produces an in-memory file tree so callers can extract files by ISO path.
 import os
 import struct
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, BinaryIO, Tuple
 from pathlib import Path
@@ -217,21 +219,81 @@ class CueSheetParser:
                     bin_path = os.path.join(cue_dir, bin_name)
                     if os.path.exists(bin_path):
                         return bin_path
+        # Try same name with .bin extension
+        fallback = os.path.join(cue_dir, Path(cue_path).stem + ".bin")
+        if os.path.exists(fallback):
+            return fallback
         raise FileNotFoundError(f"Could not resolve BIN from CUE: {cue_path}")
+
+
+def convert_chd_to_bin(chd_path: str) -> str:
+    """Convert .chd to a temporary .bin file using chdman if available."""
+    # Check for chdman
+    chdman_paths = ["chdman", "chdman.exe"]
+    chdman = None
+    for cmd in chdman_paths:
+        try:
+            result = subprocess.run([cmd, "--help"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                chdman = cmd
+                break
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    
+    if not chdman:
+        raise RuntimeError(
+            "chdman not found. Please install MAME tools or extract the CHD manually.\n"
+            "CHD files must be converted to BIN/CUE or ISO before use.\n"
+            "Download chdman from: https://www.mamedev.org"
+        )
+    
+    # Create temp output files
+    temp_dir = tempfile.mkdtemp(prefix="bubsy_chd_")
+    base_name = Path(chd_path).stem
+    out_bin = os.path.join(temp_dir, base_name + ".bin")
+    out_cue = os.path.join(temp_dir, base_name + ".cue")
+    
+    # Run chdman extractcd
+    result = subprocess.run(
+        [chdman, "extractcd", "-i", chd_path, "-o", out_cue, "-ob", out_bin],
+        capture_output=True, text=True
+    )
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"chdman failed: {result.stderr}\n{result.stdout}")
+    
+    if not os.path.exists(out_bin):
+        raise RuntimeError(f"chdman did not produce output: {out_bin}")
+    
+    return out_bin
 
 
 def open_ps1_image(path: str) -> ISOParser:
     """
-    Factory: open a PS1 disc image, whether .iso, .bin, or .cue.
+    Factory: open a PS1 disc image, whether .iso, .bin, .cue, or .chd.
     Returns a ready-to-use ISOParser.
+    
+    For .chd files, attempts to use chdman to convert to BIN first.
     """
     ext = Path(path).suffix.lower()
+    actual_path = path
+    
+    if ext == ".chd":
+        # Convert CHD to BIN
+        actual_path = convert_chd_to_bin(path)
+        print(f"Converted CHD to temporary BIN: {actual_path}")
+    
     if ext == ".cue":
-        bin_path = CueSheetParser.resolve_bin(path)
+        bin_path = CueSheetParser.resolve_bin(actual_path)
         parser = ISOParser(bin_path)
     else:
-        parser = ISOParser(path)
+        parser = ISOParser(actual_path)
+    
     if not parser.open():
-        raise ValueError(f"Could not detect ISO 9660 filesystem in {path}")
+        raise ValueError(
+            f"Could not detect ISO 9660 filesystem in {path}\n"
+            f"Tried sector sizes: 2048, 2352 (MODE1), 2352 (MODE2 XA)\n"
+            f"The file may be corrupted, not a PS1 disc image, or use an unsupported format."
+        )
     parser.parse()
     return parser
