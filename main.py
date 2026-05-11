@@ -23,46 +23,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import BuildConfig, get_build_by_name, detect_build_from_iso
 from rom_parser import open_ps1_image
-from pack_manager import load_pack, list_available_packs, PackInfo
+from pack_manager import load_pack, list_available_packs, PackInfo, create_sample_manifest
 from injector import TextureInjector, InjectionResult
 from color_mapper import ColorMapper, load_color_manifest
-from PIL import Image, ImageTk
-
-
-"""
-main.py — Bubsy 3D Texture Injector GUI Entry Point.
-
-A Windows .exe GUI application for injecting textures into PS1 Bubsy 3D ROMs.
-Supports drag-and-drop ROM loading, selectable texture packs, preview,
-dry-run mode, backup/restore, and progress tracking.
-
-To build as .exe:
-    pip install -r requirements.txt
-    build.bat
-"""
-
-import os
-import sys
-import json
-import threading
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
-from pathlib import Path
-
-# Ensure our modules are importable
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from config import BuildConfig, get_build_by_name, detect_build_from_iso
-from rom_parser import open_ps1_image
-from pack_manager import load_pack, list_available_packs, PackInfo
-from injector import TextureInjector, InjectionResult
-from color_mapper import ColorMapper, load_color_manifest
+from tim_handler import validate_tim_for_ps1, _is_power_of_2
+from extract_tim import extract_tims_from_file, generate_tim_report
+from tmd_parser import read_tmd, find_flat_shaded_primitives
 from PIL import Image, ImageTk
 
 
 # ── Constants ──
 APP_NAME = "Bubsy 3D Texture Injector"
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.4.0"
 PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
 # ── Bubsy Orange Theme Colors ──
@@ -289,8 +261,8 @@ class TextureInjectorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
-        self.root.geometry("1000x750")
-        self.root.minsize(900, 650)
+        self.root.geometry("1000x900")
+        self.root.minsize(900, 700)
 
         # State
         self.iso_path: str = ""
@@ -299,7 +271,7 @@ class TextureInjectorApp:
         self.detected_build = "Unknown"
         self.color_mapper: ColorMapper | None = None
 
-        self._build_ui()
+        self._build_scrollable_ui()
         self._scan_packs()
         
         # Keyboard shortcuts for power users
@@ -319,13 +291,103 @@ class TextureInjectorApp:
         self._log("Keyboard shortcuts: Ctrl+O (Open ROM), Ctrl+I (Inject), Ctrl+R (Refresh), F1 (Help)")
 
     # ── UI Construction ──
-    def _build_ui(self):
+    def _build_scrollable_ui(self):
+        """Build the UI inside a scrollable canvas so all steps are reachable."""
+        # Create a canvas with a VISIBLE, WIDE scrollbar
+        self.scroll_canvas = tk.Canvas(self.root, bg=BUBSY_CARD_BG, highlightthickness=0)
+        
+        # Use tk.Scrollbar (not ttk) so we can control width and colors directly
+        self.scrollbar = tk.Scrollbar(
+            self.root,
+            orient="vertical",
+            command=self.scroll_canvas.yview,
+            bg=BUBSY_ORANGE,
+            troughcolor="#FFE0B2",
+            activebackground=BUBSY_DARK_ORANGE,
+            width=24,
+            relief=tk.RAISED,
+            bd=2,
+        )
+        self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Always show scrollbar so user KNOWS scrolling is available
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Inner frame that holds ALL content
+        self.main_frame = tk.Frame(self.scroll_canvas, bg=BUBSY_CARD_BG)
+        canvas_window = self.scroll_canvas.create_window(
+            (0, 0), window=self.main_frame, anchor="nw", tags="main_frame"
+        )
+
+        # Update scrollregion whenever inner frame changes size
+        def _on_frame_configure(event=None):
+            self.scroll_canvas.update_idletasks()
+            bbox = self.scroll_canvas.bbox("all")
+            if bbox:
+                _, _, w, h = bbox
+                self.scroll_canvas.configure(scrollregion=(0, 0, w, h))
+
+        self.main_frame.bind("<Configure>", _on_frame_configure)
+
+        # Make inner frame width match canvas width
+        def _on_canvas_configure(event):
+            self.scroll_canvas.itemconfig(canvas_window, width=event.width)
+        self.scroll_canvas.bind("<Configure>", _on_canvas_configure)
+
+        # === GLOBAL MOUSEWHEEL - works from ANYWHERE in the window ===
+        def _on_mousewheel(event):
+            # Windows / macOS
+            if hasattr(event, 'delta') and event.delta:
+                self.scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                return "break"
+            # Linux (X11) - Button-4 = up, Button-5 = down
+            if hasattr(event, 'num'):
+                if event.num == 4:
+                    self.scroll_canvas.yview_scroll(-3, "units")
+                    return "break"
+                elif event.num == 5:
+                    self.scroll_canvas.yview_scroll(3, "units")
+                    return "break"
+
+        # Bind to root so it works no matter which widget is under the mouse
+        self.root.bind_all("<MouseWheel>", _on_mousewheel)
+        self.root.bind_all("<Button-4>", _on_mousewheel)
+        self.root.bind_all("<Button-5>", _on_mousewheel)
+
+        # Keyboard scrolling - always works
+        def _scroll_page_up(event):
+            self.scroll_canvas.yview_scroll(-5, "units")
+            return "break"
+        def _scroll_page_down(event):
+            self.scroll_canvas.yview_scroll(5, "units")
+            return "break"
+        def _scroll_home(event):
+            self.scroll_canvas.yview_moveto(0)
+            return "break"
+        def _scroll_end(event):
+            self.scroll_canvas.yview_moveto(1.0)
+            return "break"
+
+        self.root.bind_all("<Prior>", _scroll_page_up)    # Page Up
+        self.root.bind_all("<Next>", _scroll_page_down)   # Page Down
+        self.root.bind_all("<Home>", _scroll_home)
+        self.root.bind_all("<End>", _scroll_end)
+
+        # Build the actual UI inside the scrollable frame
+        self._build_ui(self.main_frame)
+
+        # Force initial scrollregion update after UI builds
+        self.main_frame.update_idletasks()
+        _on_frame_configure()
+
+    def _build_ui(self, main: tk.Frame):
         # Apply Bubsy orange theme
         style = setup_bubsy_theme(self.root)
 
-        # Main container with Bubsy background
-        main = tk.Frame(self.root, bg=BUBSY_CARD_BG)
-        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Main container with Bubsy background — DO NOT pack main since it's inside a canvas window
+        main.configure(bg=BUBSY_CARD_BG)
+        # NOTE: main is placed via canvas create_window, so we don't call main.pack() here
 
         # === HEADER ===
         header = tk.Frame(main, bg=BUBSY_ORANGE)
@@ -396,6 +458,14 @@ class TextureInjectorApp:
                 font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=5)
         tk.Label(step3, text="Click the big orange button", bg=BUBSY_CARD_BG,
                 fg="#666666", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+
+        # === SCROLL HINT ===
+        scroll_hint = tk.Frame(quick_frame, bg=BUBSY_CARD_BG)
+        scroll_hint.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(scroll_hint,
+                text="↓  SCROLL DOWN or DRAG the orange scrollbar on the right to see the INJECT button  ↓",
+                bg=BUBSY_ORANGE, fg=BUBSY_BLACK,
+                font=("Segoe UI", 10, "bold"), padx=10, pady=4).pack(fill=tk.X)
 
         # === ROM SECTION ===
         rom_frame = tk.LabelFrame(main, text="Step 1: Load Bubsy 3D ROM",
@@ -699,8 +769,6 @@ class TextureInjectorApp:
     def _rip_tims_worker(self, output_dir: str):
         """Background worker for TIM extraction."""
         try:
-            from extract_tim import extract_tims_from_file, generate_tim_report
-            
             total, extracted = extract_tims_from_file(
                 self.iso_path,
                 output_dir,
@@ -891,6 +959,17 @@ class TextureInjectorApp:
                 ignore_dangling_symlinks=True,
             )
             
+            # Auto-generate manifest if missing
+            manifest_path = os.path.join(dest_path, "manifest.json")
+            if not os.path.exists(manifest_path):
+                self._log("No manifest.json found — auto-generating one from textures...")
+                from pack_manager import auto_generate_manifest
+                manifest = auto_generate_manifest(dest_path)
+                if manifest:
+                    self._log(f"✅ Auto-generated manifest with {len(manifest.get('color_map', {}))} categories")
+                else:
+                    self._log("⚠️ Could not auto-generate manifest (no textures/ folder found)")
+            
             # Update UI from main thread
             self.root.after(0, lambda: self._on_pack_copy_done(
                 f"Copied pack folder: {src_folder} → {dest_path}", dest_path
@@ -923,7 +1002,6 @@ class TextureInjectorApp:
         Returns a formatted string with compliance status.
         """
         try:
-            from tim_handler import validate_tim_for_ps1
             from PIL import Image as PILImage
             
             texture_dir = os.path.join(pack.base_dir, "textures")
@@ -943,7 +1021,6 @@ class TextureInjectorApp:
                         w, h = img.size
                         
                         # Check power-of-2
-                        from tim_handler import _is_power_of_2
                         if not _is_power_of_2(w) or not _is_power_of_2(h):
                             issues_by_file[filename] = f"Size {w}x{h} is not power-of-2 (must be 8,16,32,64,128,256)"
                             continue
@@ -1352,7 +1429,6 @@ https://github.com/MapleteamXP/bubsy-texture-injector
             for tmd_path in tmd_files:
                 try:
                     data = parser.extract_file(tmd_path)
-                    from tmd_parser import read_tmd, find_flat_shaded_primitives
                     model = read_tmd(data)
                     flat = find_flat_shaded_primitives(model)
                     

@@ -71,11 +71,17 @@ def load_pack(pack_dir: str) -> PackInfo:
     """Load and validate a texture pack directory."""
     manifest_path = os.path.join(pack_dir, "manifest.json")
     if not os.path.exists(manifest_path):
-        return PackInfo(
-            base_dir=pack_dir,
-            valid=False,
-            errors=["manifest.json not found"],
-        )
+        # Try auto-generating from textures folder
+        manifest = auto_generate_manifest(pack_dir)
+        if manifest:
+            # Re-check now that manifest exists
+            manifest_path = os.path.join(pack_dir, "manifest.json")
+        else:
+            return PackInfo(
+                base_dir=pack_dir,
+                valid=False,
+                errors=["manifest.json not found (and no textures/ folder to auto-generate from)"],
+            )
 
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
@@ -162,6 +168,142 @@ def list_available_packs(packs_root: str) -> List[PackInfo]:
 def list_valid_packs(packs_root: str) -> List[PackInfo]:
     """Return only valid packs."""
     return [p for p in list_available_packs(packs_root) if p.valid]
+
+
+def auto_generate_manifest(pack_dir: str, pack_name: str = None) -> dict:
+    """Auto-generate a manifest.json by scanning textures/ folder.
+    
+    Looks at filenames to guess surface types:
+      grass_*.png → grass
+      rock_*.png  → rock
+      dirt_*.png  → dirt
+      lava_*.png  → lava
+      sand_*.png  → sand
+      snow_*.png  → snow
+      water_*.png → water
+      wood_*.png  → wood
+      metal_*.png → metal
+      etc.
+    """
+    textures_dir = os.path.join(pack_dir, "textures")
+    if not os.path.isdir(textures_dir):
+        return None
+    
+    # Collect all image files
+    image_files = []
+    for f in os.listdir(textures_dir):
+        if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif")):
+            image_files.append(f)
+    
+    if not image_files:
+        return None
+    
+    # Categorize by filename keywords
+    categories = {
+        "grass": [], "rock": [], "stone": [], "dirt": [], "ground": [],
+        "lava": [], "fire": [], "sand": [], "snow": [], "ice": [],
+        "water": [], "wood": [], "metal": [], "brick": [], "checker": [],
+        "sky": [], "cloud": [], "wall": [], "floor": [], "roof": [],
+    }
+    
+    # Default fallback for anything that doesn't match
+    uncategorized = []
+    
+    for img in sorted(image_files):
+        lower = img.lower()
+        matched = False
+        for keyword, file_list in categories.items():
+            if keyword in lower:
+                file_list.append(f"textures/{img}")
+                matched = True
+                break
+        if not matched:
+            uncategorized.append(f"textures/{img}")
+    
+    # Build color_map from categories
+    color_map = {}
+    
+    # Predefined color ranges for common surfaces
+    color_ranges = {
+        "grass":  {"color_range": {"r": [0, 60],   "g": [120, 255], "b": [0, 80]},   "tolerance": 25},
+        "rock":   {"color_range": {"r": [80, 160], "g": [60, 120],  "b": [40, 80]},   "tolerance": 20},
+        "stone":  {"color_range": {"r": [100, 180],"g": [100, 180], "b": [100, 180]},"tolerance": 20},
+        "dirt":   {"color_range": {"r": [100, 180],"g": [60, 120],  "b": [20, 60]},   "tolerance": 20},
+        "ground": {"color_range": {"r": [80, 160], "g": [60, 120],  "b": [20, 80]},   "tolerance": 20},
+        "lava":   {"color_range": {"r": [180, 255],"g": [40, 120],  "b": [0, 40]},    "tolerance": 30},
+        "fire":   {"color_range": {"r": [180, 255],"g": [40, 120],  "b": [0, 40]},    "tolerance": 30},
+        "sand":   {"color_range": {"r": [180, 255],"g": [160, 220], "b": [100, 160]}, "tolerance": 20},
+        "snow":   {"color_range": {"r": [200, 255],"g": [200, 255], "b": [200, 255]}, "tolerance": 15},
+        "ice":    {"color_range": {"r": [150, 220],"g": [180, 240], "b": [200, 255]}, "tolerance": 15},
+        "water":  {"color_range": {"r": [0, 60],   "g": [60, 140],  "b": [140, 255]}, "tolerance": 20},
+        "wood":   {"color_range": {"r": [120, 180],"g": [80, 140],  "b": [20, 60]},   "tolerance": 20},
+        "metal":  {"color_range": {"r": [140, 200],"g": [140, 200], "b": [140, 200]}, "tolerance": 15},
+        "brick":  {"color_range": {"r": [160, 220],"g": [60, 100],  "b": [20, 60]},   "tolerance": 20},
+        "checker":{"color_range": {"r": [0, 255],  "g": [0, 255],   "b": [0, 255]},   "tolerance": 50},
+        "sky":    {"color_range": {"r": [0, 80],   "g": [80, 180],  "b": [140, 255]}, "tolerance": 25},
+        "cloud":  {"color_range": {"r": [200, 255],"g": [200, 255], "b": [200, 255]}, "tolerance": 15},
+        "wall":   {"color_range": {"r": [120, 200],"g": [100, 160], "b": [60, 120]},  "tolerance": 20},
+        "floor":  {"color_range": {"r": [100, 180],"g": [80, 140],  "b": [40, 100]},  "tolerance": 20},
+        "roof":   {"color_range": {"r": [100, 180],"g": [40, 80],   "b": [20, 60]},   "tolerance": 20},
+    }
+    
+    for keyword, textures in categories.items():
+        if textures:
+            entry = {
+                "textures": textures,
+                "randomize": True,
+                "scale": 1.0,
+                "uv_mode": "repeat",
+                "priority": 1,
+            }
+            if keyword in color_ranges:
+                entry.update(color_ranges[keyword])
+            color_map[keyword] = entry
+    
+    # Dump uncategorized into a generic "default" entry
+    if uncategorized:
+        color_map["default"] = {
+            "color_range": {"r": [0, 255], "g": [0, 255], "b": [0, 255]},
+            "tolerance": 100,
+            "textures": uncategorized,
+            "randomize": True,
+            "scale": 1.0,
+            "uv_mode": "repeat",
+            "priority": 0,
+        }
+    
+    # Build manifest
+    if pack_name is None:
+        pack_name = os.path.basename(os.path.normpath(pack_dir))
+    
+    manifest = {
+        "pack_name": pack_name,
+        "author": "Auto-Generated",
+        "version": "1.0.0",
+        "license": "Unknown",
+        "description": "Auto-generated manifest from texture filenames.",
+        "source_url": "",
+        "color_map": color_map,
+        "level_overrides": {},
+        "global_settings": {
+            "texture_size": 128,
+            "color_depth": 16,
+            "uv_mode": "world_space"
+        },
+        "metadata": {
+            "total_textures": len(image_files),
+            "categories": list(color_map.keys()),
+            "auto_generated": True,
+            "created_date": "2026-05-08"
+        }
+    }
+    
+    # Write manifest.json
+    manifest_path = os.path.join(pack_dir, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    
+    return manifest
 
 
 def create_sample_manifest(
